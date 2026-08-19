@@ -1,0 +1,55 @@
+<script lang="ts">
+  import {
+    ArrowLeftIcon,
+    ArrowRightIcon,
+    InfoIcon,
+    MoreVerticalIcon,
+    UserIcon,
+    XIcon,
+  } from "svelte-feather-icons";
+</script>
+
+<div class="rounded-lg border border-white/10 overflow-hidden">
+  <div class="flex bg-zinc-900 items-end">
+    <div class="px-4 py-3 flex gap-1.5">
+      <div class="w-2.5 h-2.5 rounded-full bg-red-500" />
+      <div class="w-2.5 h-2.5 rounded-full bg-yellow-500" />
+      <div class="w-2.5 h-2.5 rounded-full bg-green-500" />
+    </div>
+    <div class="flex ml-2">
+      <div class="rounded-t-lg bg-zinc-800 h-7 w-44 px-2 flex items-center">
+        <p class="text-xs font-semibold">sshit</p>
+        <XIcon class="w-3.5 h-3.5 ml-auto text-zinc-400" />
+      </div>
+    </div>
+  </div>
+  <div class="flex py-1 bg-zinc-800 gap-2">
+    <div class="flex px-2 py-1 gap-2">
+      <ArrowLeftIcon class="w-5 h-5 text-zinc-500" />
+      <ArrowRightIcon class="w-5 h-5 text-zinc-500" />
+    </div>
+    <div class="rounded-full flex-1 bg-zinc-900/60 flex items-center px-2">
+      <InfoIcon class="w-4 h-4 text-zinc-400" />
+      <p class="text-sm ml-2 select-none text-zinc-300">
+        localhost:2222
+      </p>
+    </div>
+    <div class="flex items-center gap-3 px-2">
+      <UserIcon class="w-4 h-4 text-zinc-300" />
+      <MoreVerticalIcon class="w-4 h-4 text-zinc-300" />
+    </div>
+  </div>
+  <video playsinline muted autoplay loop controls width={2476} height={1534}>
+    <!-- HEVC (Safari) -->
+    <source
+      src="https://sshx.s3.amazonaws.com/media/teaser-video.mp4"
+      type={`video/mp4; codecs="hvc1"`}
+    />
+    <!-- VP9 (Chrome and other browsers) -->
+    <source
+      src="https://sshx.s3.amazonaws.com/media/teaser-video.webm"
+      type="video/webm"
+    />
+    <track kind="captions" />
+  </video>
+</div>

@@ -1,0 +1,18 @@
+# Go build outputs
+/sshit
+*.test
+
+# Coverage
+coverage.out
+
+# Vendored inspection checkout
+.deps/
+
+# Frontend dependencies and generated assets
+web/node_modules/
+internal/web/dist/
+
+# Local editor files
+.DS_Store
+.idea/
+.vscode/
