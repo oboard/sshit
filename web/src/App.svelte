@@ -33,6 +33,8 @@
     y?: number;
     cols?: number;
     rows?: number;
+    width?: number;
+    height?: number;
     data?: string;
     users?: ServerUser[];
     shells?: Shell[];
@@ -46,6 +48,7 @@
   let clientID = 0;
   let users: ServerUser[] = [];
   let shells: Shell[] = [];
+  let termRefs: Record<number, WebTerm> = {};
   let outputs: Record<number, string> = {};
   let zOrder: Record<number, number> = {};
   let topZ = 1;
@@ -101,9 +104,25 @@
   function applyState(message: Message) {
     if (message.users) users = message.users;
     if (message.shells) {
-      shells = message.shells;
+      const localShells = new Map(shells.map((shell) => [shell.id, shell]));
+      shells = message.shells.map((incoming) => {
+        const local = localShells.get(incoming.id);
+        if (local && incoming.id === movingShellID) {
+          return { ...incoming, x: local.x, y: local.y };
+        }
+        if (local && incoming.id === resizingShellID) {
+          return {
+            ...incoming,
+            width: local.width,
+            height: local.height,
+            cols: local.cols,
+            rows: local.rows,
+          };
+        }
+        return incoming;
+      });
       const nextOutputs = { ...outputs };
-      for (const shell of shells) {
+      for (const shell of message.shells) {
         zOrder[shell.id] ??= ++topZ;
         if (shell.buffer !== undefined) {
           nextOutputs[shell.id] = shell.buffer;
@@ -198,6 +217,14 @@
     movingOrigin = [shell.x, shell.y];
   }
 
+  function startResize(id: number, event: MouseEvent, width: number, height: number) {
+    event.preventDefault();
+    focusShell(id);
+    resizingShellID = id;
+    resizingStart = [event.clientX, event.clientY];
+    resizingOrigin = [width, height];
+  }
+
   function startPan(event: MouseEvent) {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
@@ -233,6 +260,22 @@
       return;
     }
 
+    if (resizingShellID !== -1) {
+      const width = Math.max(320, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
+      const height = Math.max(180, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
+      shells = shells.map((shell) => {
+        if (shell.id !== resizingShellID) return shell;
+        const next = { ...shell, width, height };
+        const fitted = termRefs[shell.id]?.fitSize();
+        if (fitted) {
+          next.cols = fitted.cols;
+          next.rows = fitted.rows;
+        }
+        return next;
+      });
+      return;
+    }
+
     if (movingShellID !== -1) {
       const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
       const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
@@ -244,6 +287,16 @@
 
   function stopMove() {
     panning = false;
+    if (resizingShellID !== -1) {
+      const shell = shells.find((shell) => shell.id === resizingShellID);
+      if (shell) {
+        const fitted = termRefs[shell.id]?.fitSize();
+        const cols = fitted?.cols ?? shell.cols;
+        const rows = fitted?.rows ?? shell.rows;
+        send({ type: "resize", id: shell.id, width: shell.width, height: shell.height, cols, rows });
+      }
+      resizingShellID = -1;
+    }
     if (movingShellID !== -1) {
       const shell = shells.find((shell) => shell.id === movingShellID);
       if (shell) send({ type: "move", id: shell.id, x: shell.x, y: shell.y });
@@ -320,13 +373,14 @@
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
     {#each shells as shell (shell.id)}
       <WebTerm
+        bind:this={termRefs[shell.id]}
         {shell}
         output={outputs[shell.id] ?? ""}
         zIndex={zOrder[shell.id] ?? 1}
         on:focus={(event) => focusShell(event.detail.id)}
         on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
+        on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
         on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
-        on:resize={(event) => send({ type: "resize", id: event.detail.id, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height })}
         on:close={(event) => send({ type: "close", id: event.detail.id })}
       />
     {/each}

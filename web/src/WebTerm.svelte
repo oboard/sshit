@@ -25,7 +25,6 @@
 
   const dispatch = createEventDispatcher<{
     input: { id: number; data: string };
-    resize: { id: number; cols: number; rows: number; width: number; height: number };
     close: { id: number };
     startMove: { id: number; event: MouseEvent };
     startResize: { id: number; event: MouseEvent; width: number; height: number };
@@ -35,7 +34,6 @@
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
-  let resizeObserver: ResizeObserver;
   let terminalReady = false;
   let focused = false;
   let currentTitle = "sshit shell";
@@ -60,17 +58,14 @@
   function fitAndReport() {
     if (!terminal || !fitAddon || !termEl) return;
     fitAddon.fit();
-    dispatch("resize", {
-      id: shell.id,
-      cols: terminal.cols,
-      rows: terminal.rows,
-      width: Math.round(shell.width || termEl.offsetWidth),
-      height: Math.round(shell.height || termEl.offsetHeight),
-    });
   }
 
-  $: if (terminalReady && terminal && fitAddon && termEl && shell.width && shell.height) {
-    tick().then(fitAndReport);
+  export function fitSize() {
+    if (!terminal || !fitAddon || !termEl) {
+      return { cols: shell.cols || 80, rows: shell.rows || 24 };
+    }
+    fitAddon.fit();
+    return { cols: terminal.cols, rows: terminal.rows };
   }
 
   onMount(async () => {
@@ -99,13 +94,9 @@
 
     await tick();
     fitAndReport();
-
-    resizeObserver = new ResizeObserver(fitAndReport);
-    resizeObserver.observe(termEl);
   });
 
   onDestroy(() => {
-    resizeObserver?.disconnect();
     terminal?.dispose();
   });
 </script>
@@ -167,11 +158,14 @@
   }
 
   .resize-handle {
-    @apply absolute -bottom-1 -right-1 h-5 w-5 cursor-nwse-resize rounded-sm;
+    @apply absolute -bottom-1 -right-1 h-5 w-5 rounded-sm;
+    cursor: se-resize;
+    cursor: nwse-resize;
   }
 
   .resize-handle::after {
     content: "";
     @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 border-zinc-500;
+    pointer-events: none;
   }
 </style>
