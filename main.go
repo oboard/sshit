@@ -211,8 +211,8 @@ type wsEnvelope struct {
 	Rows     uint16          `json:"rows,omitempty"`
 	Data     string          `json:"data,omitempty"`
 	Password string          `json:"password,omitempty"`
-	Users    []webUser       `json:"users,omitempty"`
-	Shells   []webShellState `json:"shells,omitempty"`
+	Users    []webUser       `json:"users"`
+	Shells   []webShellState `json:"shells"`
 	User     *webUser        `json:"user,omitempty"`
 	Shell    *webShellState  `json:"shell,omitempty"`
 }

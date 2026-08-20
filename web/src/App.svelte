@@ -1,7 +1,7 @@
 <script lang="ts">
   import "@fontsource-variable/inter";
 
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import Avatars from "$lib/ui/Avatars.svelte";
   import ChooseName from "$lib/ui/ChooseName.svelte";
@@ -45,6 +45,7 @@
   };
 
   let fabricEl: HTMLDivElement;
+  let passwordInputEl: HTMLInputElement;
   let socket: WebSocket | null = null;
   let connected = false;
   let authRequired = false;
@@ -91,6 +92,9 @@
   ]) as [number, WsUser][];
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
+  $: if (authRequired && !authenticated && passwordInputEl) {
+    tick().then(() => passwordInputEl?.focus());
+  }
   $: if (connected && $settings.name && $settings.name !== lastSentName) {
     send({ type: "setName", name: $settings.name });
     lastSentName = $settings.name;
@@ -110,6 +114,7 @@
   function applyState(message: Message) {
     if (message.users) users = message.users;
     if (message.shells) {
+      const previousShellCount = shells.length;
       const localShells = new Map(shells.map((shell) => [shell.id, shell]));
       shells = message.shells.map((incoming) => {
         const local = localShells.get(incoming.id);
@@ -136,6 +141,10 @@
       }
       outputs = nextOutputs;
       zOrder = zOrder;
+      if (previousShellCount === 0 && shells.length === 1) {
+        const shell = shells[0];
+        requestAnimationFrame(() => moveCanvasTo(shell.x, shell.y, 1));
+      }
     }
   }
 
@@ -464,7 +473,7 @@
           type="password"
           placeholder="Password"
           bind:value={password}
-          autofocus
+          bind:this={passwordInputEl}
         />
         {#if authError}
           <p class="mb-3 text-sm text-red-300">{authError}</p>
