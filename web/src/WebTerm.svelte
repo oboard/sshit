@@ -21,6 +21,7 @@
   export let shell: Shell;
   export let zIndex = 1;
   export let output = "";
+  export let focused = false;
 
   const dispatch = createEventDispatcher<{
     input: { id: number; data: string };
@@ -28,13 +29,13 @@
     startMove: { id: number; event: MouseEvent };
     startResize: { id: number; event: MouseEvent; width: number; height: number };
     focus: { id: number };
+    blur: { id: number };
   }>();
 
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
   let terminalReady = false;
-  let focused = false;
   let currentTitle = "sshit shell";
   let renderedOutputLength = 0;
 
@@ -86,10 +87,11 @@
     terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
     terminal.onData((data) => dispatch("input", { id: shell.id, data }));
     terminal.onFocus(() => {
-      focused = true;
       dispatch("focus", { id: shell.id });
     });
-    terminal.onBlur(() => (focused = false));
+    terminal.onBlur(() => {
+      dispatch("blur", { id: shell.id });
+    });
 
     await tick();
     fitAndReport();

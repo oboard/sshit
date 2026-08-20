@@ -11,14 +11,17 @@
     ListIcon,
     TypeIcon,
   } from "svelte-feather-icons";
-  import type * as Y from "yjs";
+  import * as Y from "yjs";
 
   import { ensureDefaultDocument, markdownTextForDoc } from "$lib/yjsStore";
+  import { getActiveCollab } from "$lib/collab";
+  import { settings } from "$lib/settings";
 
   export let docId: string;
   export let activeUsers = 1;
   export let synced = false;
   export let compact = false;
+  export let userId = 0;
 
   let textarea: HTMLTextAreaElement;
   let value = "";
@@ -26,6 +29,8 @@
   let applyingRemote = false;
   let splitView = true;
   let ytext = markdownTextForDoc(docId);
+  let remoteCursors: { position: number; color: string; name: string; selection?: [number, number] }[] = [];
+  let awarenessUnsubscribe: (() => void) | null = null;
 
   marked.use({
     gfm: true,
@@ -39,6 +44,7 @@
     value = ytext.toString();
     requestAnimationFrame(() => {
       applyingRemote = false;
+      refreshRemoteCursors();
     });
   }
 
@@ -52,6 +58,19 @@
   function handleInput() {
     if (applyingRemote) return;
     replaceWholeDocument(value);
+    broadcastLocalCursor();
+  }
+
+  function broadcastLocalCursor() {
+    const pos = textarea?.selectionStart ?? 0;
+    const selEnd = textarea?.selectionEnd ?? pos;
+    getActiveCollab()?.setAwareness({
+      anchor: { kind: "docCursor", docId },
+      cursor: pos,
+      selection: pos !== selEnd ? [pos, selEnd] : undefined,
+      name: $settings.name || `user-${userId}`,
+      color: "#f472b6",
+    });
   }
 
   function wrapSelection(prefix: string, suffix = prefix, placeholder = "文本") {
@@ -64,6 +83,7 @@
     replaceWholeDocument(nextValue);
     requestAnimationFrame(() => {
       textarea?.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
+      broadcastLocalCursor();
     });
   }
 
@@ -80,6 +100,43 @@
     const nextValue = value.slice(0, lineStart) + nextSelected + value.slice(end);
     value = nextValue;
     replaceWholeDocument(nextValue);
+    requestAnimationFrame(() => broadcastLocalCursor());
+  }
+
+  function refreshRemoteCursors() {
+    remoteCursors = getActiveCollab()?.getDocCursors(docId) ?? [];
+  }
+
+  function escapeHtml(str: string) {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderSourceWithCursors(rawText: string) {
+    if (!remoteCursors.length) return escapeHtml(rawText);
+
+    // Insert cursor marks into text — we need to work with offset positions
+    let htmlText = "";
+    let lastOffset = 0;
+
+    // Build sorted list of cursor highlights (one per line)
+    // We mark whole lines for each cursor so the last one wins visually
+    const sorted = [...remoteCursors].sort((a, b) => a.position - b.position);
+
+    for (const cursor of sorted) {
+      if (cursor.position < 0 || cursor.position >= rawText.length) continue;
+      const lineStart = rawText.lastIndexOf("\n", Math.max(0, cursor.position - 1)) + 1;
+      const lineEnd = rawText.indexOf("\n", cursor.position) !== -1 ? rawText.indexOf("\n", cursor.position) : rawText.length;
+
+      htmlText += escapeHtml(rawText.slice(lastOffset, lineStart));
+      htmlText += `<span class="remote-cursor-line" style="border-left: 2px solid ${cursor.color}; background: ${cursor.color}10; position: relative;" data-cursor-name="${escapeHtml(cursor.name)}" data-cursor-color="${cursor.color}" data-cursor-pos="${cursor.position}">`;
+      htmlText += escapeHtml(rawText.slice(lineStart, lineEnd));
+      htmlText += `<span class="cursor-label" style="position: absolute; right: 0; top: -1.2em; background: ${cursor.color}; color: #fff; font-size: 10px; padding: 0 4px; border-radius: 3px; white-space: nowrap; pointer-events: none;">${escapeHtml(cursor.name)}</span></span>`;
+      htmlText += escapeHtml(rawText.slice(lineEnd, Math.min(lineEnd + 200, rawText.length)));
+      lastOffset = lineEnd + 1;
+    }
+
+    htmlText += escapeHtml(rawText.slice(lastOffset));
+    return htmlText;
   }
 
   onMount(() => {
@@ -87,10 +144,26 @@
     ytext = markdownTextForDoc(docId);
     syncFromYText();
     ytext.observe(syncFromYText);
+    textarea?.addEventListener("focus", broadcastLocalCursor);
+    textarea?.addEventListener("blur", () => getActiveCollab()?.clearDocCursor(docId));
+    textarea?.addEventListener("pointerup", broadcastLocalCursor);
+    textarea?.addEventListener("keyup", broadcastLocalCursor);
+    if (getActiveCollab()) {
+      awarenessUnsubscribe = getActiveCollab()!.onAwareness(() => {
+        refreshRemoteCursors();
+      });
+    }
   });
 
   onDestroy(() => {
     ytext.unobserve(syncFromYText as (event: Y.YTextEvent) => void);
+    textarea?.removeEventListener("focus", broadcastLocalCursor);
+    textarea?.removeEventListener("blur", () => getActiveCollab()?.clearDocCursor(docId));
+    textarea?.removeEventListener("pointerup", broadcastLocalCursor);
+    textarea?.removeEventListener("keyup", broadcastLocalCursor);
+    getActiveCollab()?.clearDocCursor(docId);
+    awarenessUnsubscribe?.();
+    awarenessUnsubscribe = null;
   });
 </script>
 
@@ -134,14 +207,26 @@
   </div>
 
   <div class="editor-grid" class:single={!splitView}>
-    <textarea
-      bind:this={textarea}
-      bind:value
-      on:input={handleInput}
-      spellcheck="false"
-      placeholder="写下 Markdown..."
-      aria-label="Collaborative Markdown source"
-    ></textarea>
+    <div class="source-editor relative">
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="collab-gutter"
+        bind:this={textarea}
+        tabindex="0"
+        contenteditable="true"
+        spellcheck="false"
+        role="textbox"
+        aria-label="Collaborative Markdown source"
+        aria-multiline="true"
+        on:input={handleInput}
+        on:focus={broadcastLocalCursor}
+        on:blur={() => getActiveCollab()?.clearDocCursor(docId)}
+        on:pointerup={broadcastLocalCursor}
+        on:keyup={broadcastLocalCursor}
+      >
+        {@html renderSourceWithCursors(value)}
+      </div>
+    </div>
     {#if splitView}
       <article class="preview wysiwyg" aria-label="Markdown preview">
         {@html html}
@@ -205,8 +290,12 @@
     @apply grid-cols-1;
   }
 
-  textarea {
-    @apply h-full w-full resize-none border-0 border-r border-zinc-800 bg-zinc-950/30 p-5 font-mono text-[15px] leading-7 text-zinc-100 outline-none placeholder:text-zinc-600;
+  .source-editor {
+    @apply relative;
+  }
+
+  .collab-gutter {
+    @apply h-full w-full overflow-auto border-r border-zinc-800 bg-zinc-950/30 p-5 font-mono text-[15px] leading-7 text-zinc-100 outline-none whitespace-pre-wrap;
   }
 
   .preview {
@@ -267,7 +356,7 @@
       @apply grid-cols-1;
     }
 
-    textarea {
+    .collab-gutter {
       @apply border-r-0 border-b;
       min-height: 260px;
     }

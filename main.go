@@ -201,30 +201,32 @@ func shellHandler(s ssh.Session) {
 }
 
 type wsEnvelope struct {
-	Type     string          `json:"type"`
-	ID       int             `json:"id,omitempty"`
-	Name     string          `json:"name,omitempty"`
-	X        int             `json:"x,omitempty"`
-	Y        int             `json:"y,omitempty"`
-	Width    int             `json:"width,omitempty"`
-	Height   int             `json:"height,omitempty"`
-	Cols     uint16          `json:"cols,omitempty"`
-	Rows     uint16          `json:"rows,omitempty"`
-	Data     string          `json:"data,omitempty"`
-	Password string          `json:"password,omitempty"`
-	Update   string          `json:"update,omitempty"`
-	Users    []webUser       `json:"users"`
-	Shells   []webShellState `json:"shells"`
-	User     *webUser        `json:"user,omitempty"`
-	Shell    *webShellState  `json:"shell,omitempty"`
+	Type        string          `json:"type"`
+	ID          int             `json:"id,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	X           int             `json:"x,omitempty"`
+	Y           int             `json:"y,omitempty"`
+	CursorStyle string         `json:"cursorStyle,omitempty"`
+	Width       int             `json:"width,omitempty"`
+	Height      int             `json:"height,omitempty"`
+	Cols        uint16          `json:"cols,omitempty"`
+	Rows        uint16          `json:"rows,omitempty"`
+	Data        string          `json:"data,omitempty"`
+	Password    string          `json:"password,omitempty"`
+	Update      string          `json:"update,omitempty"`
+	Users       []webUser       `json:"users"`
+	Shells      []webShellState `json:"shells"`
+	User        *webUser        `json:"user,omitempty"`
+	Shell       *webShellState  `json:"shell,omitempty"`
 }
 
 type webUser struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-	Cursor bool   `json:"cursor"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	X           int    `json:"x"`
+	Y           int    `json:"y"`
+	Cursor      bool   `json:"cursor"`
+	CursorStyle string `json:"cursorStyle,omitempty"`
 }
 
 type webShellState struct {

@@ -12,7 +12,7 @@
   import Settings from "$lib/ui/Settings.svelte";
   import ToastContainer from "$lib/ui/ToastContainer.svelte";
   import Toolbar from "$lib/ui/Toolbar.svelte";
-  import { CollabConnection, type CollabStatus } from "$lib/collab";
+  import { CollabConnection, type CollabStatus, collabConnection } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
   import type { WsUser } from "$lib/protocol";
@@ -71,6 +71,7 @@
   let settingsOpen = false;
   let showNetworkInfo = false;
   let collabWindows: CollabWindowState[] = [];
+  let focusedShellID = -1;
   let focusedCollabWindowID = -1;
   let drawingMode = false;
   let drawingColor = "#f472b6";
@@ -80,7 +81,7 @@
   let drawing = false;
   let activeDrawingAnchor: DrawingAnchor = { kind: "world" };
   let collabStatus: CollabStatus = "disconnected";
-  let collabConnection: CollabConnection | null = null;
+  let collabConn: CollabConnection | null = null;
   let serverLatency: number | null = null;
   let shellLatency: number | null = 0;
   let pingTimer: number | undefined;
@@ -237,7 +238,7 @@
         const collabPassword = password;
         password = "";
         makeToast({ kind: "success", message: "Connected to sshit." });
-        collabConnection?.connect(collabPassword);
+        collabConn?.connect(collabPassword);
         if ($settings.name) {
           send({ type: "setName", name: $settings.name });
           lastSentName = $settings.name;
@@ -390,11 +391,14 @@
   }
 
   function focusShell(id: number) {
+    focusedShellID = id;
+    focusedCollabWindowID = -1;
     zOrder[id] = ++topZ;
     zOrder = zOrder;
   }
 
   function focusCollabWindow(id: number) {
+    focusedShellID = -1;
     focusedCollabWindowID = id;
     patchCollabWindow(id, { zIndex: ++topZ });
   }
@@ -452,6 +456,8 @@
     const target = event.target as HTMLElement;
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
+    focusedShellID = -1;
+    focusedCollabWindowID = -1;
     panning = true;
     panStart = [event.clientX, event.clientY];
     panOrigin = [viewportX, viewportY];
@@ -512,10 +518,28 @@
     viewportY = mouseY - beforeY * zoom;
   }
 
+  function detectCursorStyle(clientX: number, clientY: number): string {
+    // Find the topmost element at the given screen coordinates, excluding our own
+    // remote-cursor overlays, and read its computed cursor style.
+    const el = document.elementFromPoint(clientX, clientY);
+    if (!el) return "default";
+    // Walk up through the DOM to find the first element with a non-auto cursor.
+    // This handles cases where the element itself has cursor: auto but a parent
+    // sets cursor: pointer, etc.
+    let target: Element | null = el;
+    while (target) {
+      const style = window.getComputedStyle(target).cursor;
+      if (style && style !== "auto") return style;
+      target = target.parentElement;
+    }
+    return "default";
+  }
+
   function handleMouseMove(event: MouseEvent) {
     if (fabricEl) {
       const [x, y] = screenToWorld(event.clientX, event.clientY);
-      send({ type: "cursor", x, y });
+      const cursorStyle = detectCursorStyle(event.clientX, event.clientY);
+      send({ type: "cursor", x, y, cursorStyle });
     }
 
     if (drawingMode) return;
@@ -593,7 +617,7 @@
     refreshShapes();
     collabWindowMap.observe(refreshCollabWindows);
     drawingShapes.observe(refreshShapes);
-    collabConnection = new CollabConnection((status) => {
+    collabConn = new CollabConnection((status) => {
       collabStatus = status;
       if (status === "auth-failed") {
         makeToast({ kind: "error", message: "Collaborative workspace authentication failed." });
@@ -618,7 +642,7 @@
     window.clearTimeout(reconnectTimer);
     collabWindowMap.unobserve(refreshCollabWindows);
     drawingShapes.unobserve(refreshShapes);
-    collabConnection?.destroy();
+    collabConn?.destroy();
     socket?.close();
   });
 </script>
@@ -694,7 +718,9 @@
         {shell}
         output={outputs[shell.id] ?? ""}
         zIndex={zOrder[shell.id] ?? 1}
+        focused={focusedShellID === shell.id}
         on:focus={(event) => focusShell(event.detail.id)}
+        on:blur={() => { focusedShellID = -1; }}
         on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
         on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
         on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
