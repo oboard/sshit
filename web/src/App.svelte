@@ -36,6 +36,7 @@
     width?: number;
     height?: number;
     data?: string;
+    password?: string;
     users?: ServerUser[];
     shells?: Shell[];
     user?: ServerUser;
@@ -45,6 +46,10 @@
   let fabricEl: HTMLDivElement;
   let socket: WebSocket | null = null;
   let connected = false;
+  let authRequired = false;
+  let authenticated = false;
+  let password = "";
+  let authError = "";
   let clientID = 0;
   let users: ServerUser[] = [];
   let shells: Shell[] = [];
@@ -138,14 +143,8 @@
     socket = new WebSocket(wsURL());
 
     socket.onopen = () => {
-      connected = true;
       serverLatency = null;
       shellLatency = 0;
-      makeToast({ kind: "success", message: "Connected to sshit." });
-      if ($settings.name) {
-        send({ type: "setName", name: $settings.name });
-        lastSentName = $settings.name;
-      }
     };
 
     socket.onmessage = (event) => {
@@ -157,7 +156,25 @@
         return;
       }
 
-      if (message.type === "hello") {
+      if (message.type === "authRequired") {
+        authRequired = true;
+        authenticated = false;
+        authError = "";
+      } else if (message.type === "authFailed") {
+        authRequired = true;
+        authenticated = false;
+        authError = "Incorrect password.";
+      } else if (message.type === "hello") {
+        authRequired = false;
+        authenticated = true;
+        connected = true;
+        authError = "";
+        password = "";
+        makeToast({ kind: "success", message: "Connected to sshit." });
+        if ($settings.name) {
+          send({ type: "setName", name: $settings.name });
+          lastSentName = $settings.name;
+        }
         clientID = message.id ?? 0;
         applyState(message);
       } else if (message.type === "state") {
@@ -188,6 +205,11 @@
       Math.round((clientX - rect.left - viewportX) / zoom),
       Math.round((clientY - rect.top - viewportY) / zoom),
     ];
+  }
+
+  function submitPassword() {
+    if (!password) return;
+    send({ type: "auth", password });
   }
 
   function createShell() {
@@ -327,7 +349,9 @@
 </script>
 
 <ToastContainer />
-<ChooseName />
+{#if authenticated}
+  <ChooseName />
+{/if}
 
 <main
   class="relative h-full w-full overflow-hidden text-zinc-100"
@@ -394,6 +418,28 @@
     {/each}
     </div>
   </div>
+
+  {#if authRequired && !authenticated}
+    <div class="fixed inset-0 z-[20000] grid place-items-center bg-black/40 backdrop-blur-sm">
+      <form class="panel w-[min(92vw,420px)] p-6" on:submit|preventDefault={submitPassword}>
+        <h2 class="mb-2 text-xl font-medium">Password Required</h2>
+        <p class="mb-4 text-sm text-zinc-400">Enter the shared password to access this sshit session.</p>
+        <input
+          class="mb-2 w-full rounded border border-zinc-700 bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50"
+          type="password"
+          placeholder="Password"
+          bind:value={password}
+          autofocus
+        />
+        {#if authError}
+          <p class="mb-3 text-sm text-red-300">{authError}</p>
+        {/if}
+        <button class="mt-2 rounded bg-pink-700 px-4 py-2 font-medium hover:bg-pink-600" type="submit">
+          Unlock
+        </button>
+      </form>
+    </div>
+  {/if}
 
   <Settings open={settingsOpen} on:close={() => (settingsOpen = false)} />
 </main>

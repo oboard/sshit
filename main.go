@@ -200,20 +200,21 @@ func shellHandler(s ssh.Session) {
 }
 
 type wsEnvelope struct {
-	Type   string          `json:"type"`
-	ID     int             `json:"id,omitempty"`
-	Name   string          `json:"name,omitempty"`
-	X      int             `json:"x,omitempty"`
-	Y      int             `json:"y,omitempty"`
-	Width  int             `json:"width,omitempty"`
-	Height int             `json:"height,omitempty"`
-	Cols   uint16          `json:"cols,omitempty"`
-	Rows   uint16          `json:"rows,omitempty"`
-	Data   string          `json:"data,omitempty"`
-	Users  []webUser       `json:"users,omitempty"`
-	Shells []webShellState `json:"shells,omitempty"`
-	User   *webUser        `json:"user,omitempty"`
-	Shell  *webShellState  `json:"shell,omitempty"`
+	Type     string          `json:"type"`
+	ID       int             `json:"id,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	X        int             `json:"x,omitempty"`
+	Y        int             `json:"y,omitempty"`
+	Width    int             `json:"width,omitempty"`
+	Height   int             `json:"height,omitempty"`
+	Cols     uint16          `json:"cols,omitempty"`
+	Rows     uint16          `json:"rows,omitempty"`
+	Data     string          `json:"data,omitempty"`
+	Password string          `json:"password,omitempty"`
+	Users    []webUser       `json:"users,omitempty"`
+	Shells   []webShellState `json:"shells,omitempty"`
+	User     *webUser        `json:"user,omitempty"`
+	Shell    *webShellState  `json:"shell,omitempty"`
 }
 
 type webUser struct {
@@ -242,13 +243,14 @@ type webShell struct {
 }
 
 type webClient struct {
-	id   int
-	name string
-	x    int
-	y    int
-	conn *websocket.Conn
-	send chan wsEnvelope
-	hub  *webHub
+	id            int
+	name          string
+	x             int
+	y             int
+	authenticated bool
+	conn          *websocket.Conn
+	send          chan wsEnvelope
+	hub           *webHub
 }
 
 type webHub struct {
@@ -257,12 +259,14 @@ type webHub struct {
 	clients  map[int]*webClient
 	shells   map[int]*webShell
 	shellSeq int
+	password string
 }
 
-func newWebHub() *webHub {
+func newWebHub(password string) *webHub {
 	return &webHub{
-		clients: make(map[int]*webClient),
-		shells:  make(map[int]*webShell),
+		clients:  make(map[int]*webClient),
+		shells:   make(map[int]*webShell),
+		password: password,
 	}
 }
 
@@ -300,28 +304,39 @@ func (h *webHub) addClient(conn *websocket.Conn) *webClient {
 	h.mu.Lock()
 	h.nextID++
 	client := &webClient{
-		id:   h.nextID,
-		name: fmt.Sprintf("user-%d", h.nextID),
-		conn: conn,
-		send: make(chan wsEnvelope, 64),
-		hub:  h,
+		id:            h.nextID,
+		name:          fmt.Sprintf("user-%d", h.nextID),
+		authenticated: h.password == "",
+		conn:          conn,
+		send:          make(chan wsEnvelope, 64),
+		hub:           h,
 	}
-	h.clients[client.id] = client
+	if client.authenticated {
+		h.clients[client.id] = client
+	}
 	users, shells := h.snapshotLocked()
 	h.mu.Unlock()
-	client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells}
-	h.broadcastState()
+	if client.authenticated {
+		client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells}
+		h.broadcastState()
+	} else {
+		client.send <- wsEnvelope{Type: "authRequired"}
+	}
 	return client
 }
 
 func (h *webHub) removeClient(id int) {
 	h.mu.Lock()
+	removed := false
 	if c, ok := h.clients[id]; ok {
 		delete(h.clients, id)
 		close(c.send)
+		removed = true
 	}
 	h.mu.Unlock()
-	h.broadcastState()
+	if removed {
+		h.broadcastState()
+	}
 }
 
 func (h *webHub) createShell(x, y int, cols, rows uint16) (*webShell, error) {
@@ -425,26 +440,55 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 			}
 
 			switch msg.Type {
+			case "auth":
+				if hub.password != "" && msg.Password != hub.password {
+					client.send <- wsEnvelope{Type: "authFailed"}
+					continue
+				}
+				hub.mu.Lock()
+				if !client.authenticated {
+					client.authenticated = true
+					hub.clients[client.id] = client
+				}
+				users, shells := hub.snapshotLocked()
+				hub.mu.Unlock()
+				client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells}
+				hub.broadcastState()
 			case "setName":
+				if !client.authenticated {
+					continue
+				}
 				hub.mu.Lock()
 				client.name = msg.Name
 				hub.mu.Unlock()
 				hub.broadcastState()
 			case "cursor":
+				if !client.authenticated {
+					continue
+				}
 				hub.mu.Lock()
 				client.x, client.y = msg.X, msg.Y
 				user := webUser{ID: client.id, Name: client.name, X: client.x, Y: client.y, Cursor: true}
 				hub.mu.Unlock()
 				hub.broadcast(wsEnvelope{Type: "cursor", User: &user})
 			case "create":
+				if !client.authenticated {
+					continue
+				}
 				if _, err := hub.createShell(msg.X, msg.Y, msg.Cols, msg.Rows); err != nil {
 					log.Printf("failed to create web shell: %v", err)
 				}
 			case "input":
+				if !client.authenticated {
+					continue
+				}
 				if shell := hub.shell(msg.ID); shell != nil {
 					_, _ = shell.pty.Write([]byte(msg.Data))
 				}
 			case "resize":
+				if !client.authenticated {
+					continue
+				}
 				if shell := hub.shell(msg.ID); shell != nil {
 					if msg.Width > 0 {
 						shell.Width = msg.Width
@@ -457,6 +501,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					hub.broadcastState()
 				}
 			case "move":
+				if !client.authenticated {
+					continue
+				}
 				hub.mu.Lock()
 				if shell := hub.shells[msg.ID]; shell != nil {
 					shell.X, shell.Y = msg.X, msg.Y
@@ -464,6 +511,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 				hub.mu.Unlock()
 				hub.broadcastState()
 			case "close":
+				if !client.authenticated {
+					continue
+				}
 				hub.closeShell(msg.ID)
 			}
 		}
@@ -492,6 +542,7 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 func main() {
 	port := flag.Int("port", 2222, "port to listen on")
 	flag.IntVar(port, "p", 2222, "port to listen on")
+	password := flag.String("password", "", "password required for SSH and Web UI access")
 	flag.Parse()
 
 	hostKey, hostKeyPath, err := loadOrCreateHostKey()
@@ -506,8 +557,13 @@ func main() {
 			"session": ssh.DefaultSessionHandler,
 		},
 	}
+	if *password != "" {
+		sshServer.PasswordHandler = func(ctx ssh.Context, candidate string) bool {
+			return candidate == *password
+		}
+	}
 
-	hub := newWebHub()
+	hub := newWebHub(*password)
 	if _, err := hub.createShell(0, 0, 80, 24); err != nil {
 		log.Printf("failed to create initial web shell: %v", err)
 	}
@@ -518,7 +574,7 @@ func main() {
 	}
 	httpServer := &http.Server{Handler: httpHandler}
 
-	addr := fmt.Sprintf(":%d", *port)
+	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatal(err)

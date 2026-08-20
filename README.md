@@ -35,6 +35,12 @@ go run . --port 2022
 go run . -p 2022
 ```
 
+By default, SSH and Web UI access do not require a password. Use `--password` to require the same password for both SSH and Web UI:
+
+```bash
+go run . --password test123
+```
+
 The server uses a persistent host key at `~/.ssh/sshit_host_ed25519_key`. If the key already exists it is reused; otherwise it is generated automatically with `0600` permissions.
 
 ## SSH client
