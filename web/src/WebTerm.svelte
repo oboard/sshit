@@ -104,7 +104,7 @@
 <div
   class="term-container absolute select-none"
   class:focused
-  style="transform: translate({shell.x}px, {shell.y}px); z-index: {zIndex};"
+  style="transform: translate({shell.x}px, {shell.y}px); z-index: {zIndex}; background: {theme.background};"
   data-no-pan
   on:mousedown|stopPropagation={() => dispatch("focus", { id: shell.id })}
   on:pointerdown|stopPropagation
@@ -149,7 +149,6 @@
 <style lang="postcss">
   .term-container {
     @apply inline-block rounded-lg border border-zinc-700 opacity-90 shadow-2xl;
-    background: #181818;
     transition: opacity 200ms;
   }
 
