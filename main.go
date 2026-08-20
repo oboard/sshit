@@ -271,6 +271,8 @@ func newWebHub(password string) *webHub {
 }
 
 func (h *webHub) snapshotLocked() (users []webUser, shells []webShellState) {
+	users = make([]webUser, 0, len(h.clients))
+	shells = make([]webShellState, 0, len(h.shells))
 	for _, c := range h.clients {
 		users = append(users, webUser{ID: c.id, Name: c.name, X: c.x, Y: c.y, Cursor: true})
 	}
