@@ -46,9 +46,6 @@ jobs:
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
-        with:
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build frontend
         working-directory: web
