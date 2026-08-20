@@ -93,12 +93,13 @@
   let panStart = [0, 0];
   let panOrigin = [0, 0];
 
+  type ResizeTarget = { kind: "shell" | "collab"; id: number } | null;
+
   let movingShellID = -1;
   let movingCollabWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
-  let resizingShellID = -1;
-  let resizingCollabWindowID = -1;
+  let resizeTarget: ResizeTarget = null;
   let resizingStart = [0, 0];
   let resizingOrigin = [0, 0];
 
@@ -169,7 +170,7 @@
         if (local && incoming.id === movingShellID) {
           return { ...incoming, x: local.x, y: local.y };
         }
-        if (local && incoming.id === resizingShellID) {
+        if (local && resizeTarget?.kind === "shell" && incoming.id === resizeTarget.id) {
           return {
             ...incoming,
             width: local.width,
@@ -310,11 +311,7 @@
   function pathData(shape: DrawingShape) {
     const [originX, originY] = anchorOrigin(shape.anchor);
     return shape.points
-      .map((point, index) => {
-        const screenX = (originX + point[0]) * zoom + viewportX;
-        const screenY = (originY + point[1]) * zoom + viewportY;
-        return `${index === 0 ? "M" : "L"} ${screenX} ${screenY}`;
-      })
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${originX + point[0]} ${originY + point[1]}`)
       .join(" ");
   }
 
@@ -426,22 +423,24 @@
     movingOrigin = [window.x, window.y];
   }
 
-  function startResize(id: number, event: MouseEvent, width: number, height: number) {
+  function startWindowResize(target: Exclude<ResizeTarget, null>, event: MouseEvent, width: number, height: number) {
     event.preventDefault();
-    focusShell(id);
-    resizingShellID = id;
-    resizingCollabWindowID = -1;
+    if (target.kind === "shell") {
+      focusShell(target.id);
+    } else {
+      focusCollabWindow(target.id);
+    }
+    resizeTarget = target;
     resizingStart = [event.clientX, event.clientY];
     resizingOrigin = [width, height];
   }
 
+  function startResize(id: number, event: MouseEvent, width: number, height: number) {
+    startWindowResize({ kind: "shell", id }, event, width, height);
+  }
+
   function startCollabWindowResize(id: number, event: MouseEvent, width: number, height: number) {
-    event.preventDefault();
-    focusCollabWindow(id);
-    resizingCollabWindowID = id;
-    resizingShellID = -1;
-    resizingStart = [event.clientX, event.clientY];
-    resizingOrigin = [width, height];
+    startWindowResize({ kind: "collab", id }, event, width, height);
   }
 
   function startPan(event: MouseEvent) {
@@ -524,26 +523,25 @@
       return;
     }
 
-    if (resizingShellID !== -1) {
-      const width = Math.max(320, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
-      const height = Math.max(180, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
-      shells = shells.map((shell) => {
-        if (shell.id !== resizingShellID) return shell;
-        const next = { ...shell, width, height };
-        const fitted = termRefs[shell.id]?.fitSize();
-        if (fitted) {
-          next.cols = fitted.cols;
-          next.rows = fitted.rows;
-        }
-        return next;
-      });
-      return;
-    }
-
-    if (resizingCollabWindowID !== -1) {
-      const width = Math.max(520, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
-      const height = Math.max(360, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
-      patchCollabWindow(resizingCollabWindowID, { width, height });
+    if (resizeTarget) {
+      const minWidth = resizeTarget.kind === "shell" ? 320 : 520;
+      const minHeight = resizeTarget.kind === "shell" ? 180 : 360;
+      const width = Math.max(minWidth, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
+      const height = Math.max(minHeight, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
+      if (resizeTarget.kind === "shell") {
+        shells = shells.map((shell) => {
+          if (shell.id !== resizeTarget?.id) return shell;
+          const next = { ...shell, width, height };
+          const fitted = termRefs[shell.id]?.fitSize();
+          if (fitted) {
+            next.cols = fitted.cols;
+            next.rows = fitted.rows;
+          }
+          return next;
+        });
+      } else {
+        patchCollabWindow(resizeTarget.id, { width, height });
+      }
       return;
     }
 
@@ -565,18 +563,17 @@
 
   function stopMove() {
     panning = false;
-    if (resizingShellID !== -1) {
-      const shell = shells.find((shell) => shell.id === resizingShellID);
-      if (shell) {
-        const fitted = termRefs[shell.id]?.fitSize();
-        const cols = fitted?.cols ?? shell.cols;
-        const rows = fitted?.rows ?? shell.rows;
-        send({ type: "resize", id: shell.id, width: shell.width, height: shell.height, cols, rows });
+    if (resizeTarget) {
+      if (resizeTarget.kind === "shell") {
+        const shell = shells.find((shell) => shell.id === resizeTarget?.id);
+        if (shell) {
+          const fitted = termRefs[shell.id]?.fitSize();
+          const cols = fitted?.cols ?? shell.cols;
+          const rows = fitted?.rows ?? shell.rows;
+          send({ type: "resize", id: shell.id, width: shell.width, height: shell.height, cols, rows });
+        }
       }
-      resizingShellID = -1;
-    }
-    if (resizingCollabWindowID !== -1) {
-      resizingCollabWindowID = -1;
+      resizeTarget = null;
     }
     if (movingShellID !== -1) {
       const shell = shells.find((shell) => shell.id === movingShellID);
@@ -708,12 +705,36 @@
         </div>
       {/if}
     {/each}
+
+    <svg class="world-drawing-layer" aria-label="Collaborative world drawings">
+      {#each shapes as shape (shape.id)}
+        <path
+          d={pathData(shape)}
+          fill="none"
+          stroke={shape.color}
+          stroke-width={shape.strokeWidth}
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      {/each}
+      {#if draftShape}
+        <path
+          d={pathData(draftShape)}
+          fill="none"
+          stroke={draftShape.color}
+          stroke-width={draftShape.strokeWidth}
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          opacity="0.9"
+        />
+      {/if}
+    </svg>
     </div>
   </div>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <svg
-    class="drawing-overlay"
+    class="drawing-capture"
     role="application"
     class:drawing-active={drawingMode}
     on:pointerdown={startCanvasDrawing}
@@ -721,30 +742,8 @@
     on:pointerup={finishCanvasDrawing}
     on:pointercancel={finishCanvasDrawing}
     on:pointerleave={finishCanvasDrawing}
-    aria-label="Collaborative drawing overlay"
-  >
-    {#each shapes as shape (shape.id)}
-      <path
-        d={pathData(shape)}
-        fill="none"
-        stroke={shape.color}
-        stroke-width={shape.strokeWidth * zoom}
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    {/each}
-    {#if draftShape}
-      <path
-        d={pathData(draftShape)}
-        fill="none"
-        stroke={draftShape.color}
-        stroke-width={draftShape.strokeWidth * zoom}
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        opacity="0.9"
-      />
-    {/if}
-  </svg>
+    aria-label="Collaborative drawing capture layer"
+  ></svg>
 
   {#if drawingMode}
     <div class="fixed bottom-4 right-4 z-[12000] flex items-center gap-3 rounded-full border border-indigo-400/30 bg-zinc-950/90 px-4 py-2 text-xs text-zinc-200 shadow-2xl" data-no-pan>
@@ -784,11 +783,17 @@
 </main>
 
 <style lang="postcss">
-  .drawing-overlay {
+  .world-drawing-layer {
+    @apply pointer-events-none absolute left-0 top-0 z-[9998] overflow-visible;
+    width: 1px;
+    height: 1px;
+  }
+
+  .drawing-capture {
     @apply pointer-events-none fixed inset-0 z-[11000] h-full w-full;
   }
 
-  .drawing-overlay.drawing-active {
+  .drawing-capture.drawing-active {
     @apply pointer-events-auto;
     cursor: crosshair;
   }
