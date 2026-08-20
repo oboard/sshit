@@ -1,9 +1,9 @@
 @font-face {
   font-family: "Fira Code VF";
-  src: url("firacode/distr/woff2/FiraCode-VF.woff2") format("woff2-variations"),
-    url("firacode/distr/woff/FiraCode-VF.woff") format("woff-variations");
+  src: url("firacode/distr/woff2/FiraCode-VF.woff2") format("woff2-variations");
   font-weight: 300 700;
   font-style: normal;
+  font-display: swap;
 }
 
 @font-face {

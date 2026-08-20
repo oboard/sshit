@@ -12,7 +12,7 @@
   import Settings from "$lib/ui/Settings.svelte";
   import ToastContainer from "$lib/ui/ToastContainer.svelte";
   import Toolbar from "$lib/ui/Toolbar.svelte";
-  import { CollabConnection, type CollabStatus, collabConnection } from "$lib/collab";
+  import { CollabConnection, type CollabStatus } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
   import type { WsUser } from "$lib/protocol";

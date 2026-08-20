@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, onMount } from "svelte";
 
-  import MarkdownEditor from "$lib/ui/MarkdownEditor.svelte";
+  let MarkdownEditor: typeof import("$lib/ui/MarkdownEditor.svelte").default | null = null;
+
+  onMount(async () => {
+    MarkdownEditor = (await import("$lib/ui/MarkdownEditor.svelte")).default;
+  });
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import type { EditorWindowState } from "$lib/editorWindows";
 
@@ -39,6 +43,10 @@
   on:startResize={(event) => dispatch("startResize", event.detail)}
 >
   <div class="overflow-hidden" style="width: {windowState.width}px; height: {windowState.height}px;">
-    <MarkdownEditor docId={windowState.docId} />
+    {#if MarkdownEditor}
+      <MarkdownEditor docId={windowState.docId} />
+    {:else}
+      <div class="grid h-full place-items-center text-sm text-zinc-400">Loading editor…</div>
+    {/if}
   </div>
 </WindowFrame>

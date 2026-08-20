@@ -168,5 +168,3 @@ export class CollabConnection {
     }
   }
 }
-
-export let collabConnection: CollabConnection | null = null;

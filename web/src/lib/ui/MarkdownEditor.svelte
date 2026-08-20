@@ -1,9 +1,17 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import { EditorState, StateEffect, StateField } from "@codemirror/state";
-  import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+  import {
+    defaultKeymap,
+    history,
+    historyKeymap,
+    indentWithTab,
+  } from "@codemirror/commands";
   import { markdown } from "@codemirror/lang-markdown";
-  import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+  import {
+    defaultHighlightStyle,
+    syntaxHighlighting,
+  } from "@codemirror/language";
   import {
     Decoration,
     EditorView,
@@ -75,8 +83,14 @@
         for (const cursor of state.field(field)) {
           const caret = Math.max(0, Math.min(cursor.position, length));
           const [rawStart, rawEnd] = cursor.selection ?? [caret, caret];
-          const selectionStart = Math.max(0, Math.min(Math.min(rawStart, rawEnd), length));
-          const selectionEnd = Math.max(0, Math.min(Math.max(rawStart, rawEnd), length));
+          const selectionStart = Math.max(
+            0,
+            Math.min(Math.min(rawStart, rawEnd), length),
+          );
+          const selectionEnd = Math.max(
+            0,
+            Math.min(Math.max(rawStart, rawEnd), length),
+          );
 
           if (selectionStart !== selectionEnd) {
             decorations.push(
@@ -109,7 +123,9 @@
   }
 
   function refreshRemoteCursors() {
-    editorView?.dispatch({ effects: setRemoteCursors.of(currentRemoteCursors()) });
+    editorView?.dispatch({
+      effects: setRemoteCursors.of(currentRemoteCursors()),
+    });
   }
 
   function applyYTextToEditor() {
@@ -119,7 +135,9 @@
     if (next === current) return;
 
     applyingRemote = true;
-    editorView.dispatch({ changes: { from: 0, to: current.length, insert: next } });
+    editorView.dispatch({
+      changes: { from: 0, to: current.length, insert: next },
+    });
     applyingRemote = false;
     refreshRemoteCursors();
   }
@@ -130,7 +148,10 @@
     getActiveCollab()?.setAwareness({
       anchor: { kind: "docCursor", docId },
       cursor: selection.head,
-      selection: selection.anchor !== selection.head ? [selection.anchor, selection.head] : undefined,
+      selection:
+        selection.anchor !== selection.head
+          ? [selection.anchor, selection.head]
+          : undefined,
     });
   }
 
@@ -170,15 +191,46 @@
           updateListener,
           EditorView.theme({
             "&": { height: "100%", backgroundColor: "rgba(9, 9, 11, 0.3)" },
-            ".cm-scroller": { overflow: "auto", fontFamily: "'Fira Code VF', monospace", lineHeight: "1.75rem" },
-            ".cm-content": { padding: "1.25rem", minHeight: "100%", caretColor: "#f8fafc" },
-            ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#f8fafc !important", borderLeftWidth: "2px !important", borderLeftStyle: "solid !important" },
+            ".cm-scroller": {
+              overflow: "auto",
+              fontFamily: "'Fira Code VF', monospace",
+              lineHeight: "1.75rem",
+            },
+            ".cm-content": {
+              padding: "1.25rem",
+              minHeight: "100%",
+              caretColor: "#f8fafc",
+            },
+            ".cm-cursor, .cm-dropCursor": {
+              borderLeftColor: "#f8fafc !important",
+              borderLeftWidth: "2px !important",
+              borderLeftStyle: "solid !important",
+            },
             ".cm-focused .cm-cursor": { display: "block !important" },
             ".cm-line": { padding: "0" },
             ".cm-gutters": { display: "none" },
-            ".cm-selectionBackground, ::selection": { backgroundColor: "rgba(99, 102, 241, 0.35) !important" },
-            ".cm-remote-caret": { position: "relative", display: "inline-block", height: "1.75rem", borderLeft: "2px solid", verticalAlign: "bottom" },
-            ".cm-remote-caret-label": { position: "absolute", top: "-1rem", left: "-2px", zIndex: "10", borderRadius: "3px", padding: "0 4px", color: "white", fontSize: "10px", lineHeight: "14px", whiteSpace: "nowrap" },
+            ".cm-selectionBackground, ::selection": {
+              backgroundColor: "rgba(99, 102, 241, 0.35) !important",
+            },
+            ".cm-remote-caret": {
+              position: "relative",
+              display: "inline-block",
+              height: "1.75rem",
+              borderLeft: "2px solid",
+              verticalAlign: "bottom",
+            },
+            ".cm-remote-caret-label": {
+              position: "absolute",
+              top: "-1rem",
+              left: "-2px",
+              zIndex: "10",
+              borderRadius: "3px",
+              padding: "0 4px",
+              color: "white",
+              fontSize: "10px",
+              lineHeight: "14px",
+              whiteSpace: "nowrap",
+            },
           }),
         ],
       }),
@@ -187,7 +239,8 @@
 
     observer = () => applyYTextToEditor();
     ytext.observe(observer);
-    awarenessUnsubscribe = getActiveCollab()?.onAwareness(refreshRemoteCursors) ?? null;
+    awarenessUnsubscribe =
+      getActiveCollab()?.onAwareness(refreshRemoteCursors) ?? null;
     refreshRemoteCursors();
     await tick();
     editorView.focus();
@@ -205,5 +258,8 @@
 </script>
 
 <section class="h-full min-h-0 overflow-hidden" data-no-pan>
-  <div class="h-full min-h-0 overflow-hidden cursor-text" bind:this={editorHost}></div>
+  <div
+    class="h-full min-h-0 overflow-hidden cursor-text"
+    bind:this={editorHost}
+  ></div>
 </section>

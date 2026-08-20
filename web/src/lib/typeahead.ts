@@ -109,8 +109,10 @@ class Emitter<T> {
  * Escapes regular expression characters in a given string, from `vs/base/common/strings.ts`.
  */
 function escapeRegExpCharacters(value: string): string {
-  // eslint-disable-next-line no-useless-escape
-  return value.replace(/[\\\{\}\*\+\?\|\^\$\.\[\]\(\)]/g, "\\$&");
+  const regexpCharacters = "\\^$.*+?()[]{}|";
+  return Array.from(value, (character) =>
+    regexpCharacters.includes(character) ? `\\${character}` : character,
+  ).join("");
 }
 
 /** Port from `vs/base/common/decorators.ts` */
@@ -1446,18 +1448,19 @@ class TypeAheadStyle implements IDisposable {
     );
   }
 
-  /**
-   * Stops tracking terminal CSI changes.
-   */
-  @debounce(2000)
+  /** Stops tracking terminal CSI changes after the incoming data settles. */
+  private _stopTrackingTimer: ReturnType<typeof setTimeout> | undefined;
+
   debounceStopTracking() {
-    this._stopTracking();
+    clearTimeout(this._stopTrackingTimer);
+    this._stopTrackingTimer = setTimeout(() => this._stopTracking(), 2000);
   }
 
   /**
    * @inheritdoc
    */
   dispose() {
+    clearTimeout(this._stopTrackingTimer);
     this._stopTracking();
   }
 
@@ -1701,6 +1704,7 @@ export class TypeAheadAddon extends Disposable implements ITerminalAddon {
   }
 
   reset() {
+    clearTimeout(this._reevaluateTimer);
     this._lastRow = undefined;
   }
 
@@ -1733,12 +1737,17 @@ export class TypeAheadAddon extends Disposable implements ITerminalAddon {
    * typing. Otherwise, we could turn this on when the PTY sent data but the
    * terminal cursor is not updated, causes issues.
    */
-  @debounce(100)
+  private _reevaluateTimer: ReturnType<typeof setTimeout> | undefined;
+
   protected _reevaluatePredictorState(
     stats: PredictionStats,
     timeline: PredictionTimeline,
   ) {
-    this._reevaluatePredictorStateNow(stats, timeline);
+    clearTimeout(this._reevaluateTimer);
+    this._reevaluateTimer = setTimeout(
+      () => this._reevaluatePredictorStateNow(stats, timeline),
+      100,
+    );
   }
 
   protected _reevaluatePredictorStateNow(

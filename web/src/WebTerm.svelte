@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
-  import { Terminal } from "@xterm/xterm";
-  import { FitAddon } from "@xterm/addon-fit";
+  import type { FitAddon } from "@xterm/addon-fit";
+  import type { Terminal } from "@xterm/xterm";
 
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import { settings } from "$lib/settings";
@@ -33,12 +33,15 @@
     blur: { id: number };
   }>();
 
+  const isMac = navigator.platform.startsWith("Mac");
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
   let terminalReady = false;
   let currentTitle = "sshit shell";
   let renderedOutputLength = 0;
+  let disposed = false;
+  let terminalError = "";
 
   $: theme = themes[$settings.theme];
   $: if (terminal) {
@@ -78,37 +81,109 @@
     return { cols: terminal.cols, rows: terminal.rows };
   }
 
-  onMount(async () => {
-    terminal = new Terminal({
-      allowTransparency: false,
-      cursorBlink: true,
-      cursorStyle: "block",
-      fontFamily:
-        '"Fira Code VF", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      fontSize: 14,
-      lineHeight: 1.06,
-      scrollback: $settings.scrollback,
-      theme,
-    });
-    fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(termEl);
-    terminalReady = true;
-    terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
-    terminal.onData((data) => dispatch("input", { id: shell.id, data }));
-    terminal.onFocus(() => {
-      dispatch("focus", { id: shell.id });
-    });
-    terminal.onBlur(() => {
-      dispatch("blur", { id: shell.id });
-    });
+  async function waitForTerminalFont() {
+    const FontFaceObserver = (await import("fontfaceobserver")).default;
+    await new FontFaceObserver("Fira Code VF").load();
+  }
 
-    await tick();
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    fitAndReport(true);
+  async function initializeTerminal() {
+    terminalError = "";
+    try {
+      // Only xterm and fitting are required to show a usable terminal. Optional
+      // renderers and enhancements must never turn a transient chunk failure
+      // into a blank terminal.
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+      ]);
+      const enhancements = await Promise.allSettled([
+        import("@xterm/addon-web-links"),
+        import("@xterm/addon-webgl"),
+        import("@xterm/addon-image"),
+        import("$lib/typeahead"),
+      ]);
+      await waitForTerminalFont().catch(() => undefined);
+      if (disposed || !termEl) return;
+
+      terminal = new Terminal({
+        allowTransparency: false,
+        cursorBlink: true,
+        cursorStyle: "block",
+        fontFamily:
+          '"Fira Code VF", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        fontSize: 14,
+        lineHeight: 1.06,
+        scrollback: $settings.scrollback,
+        theme,
+      });
+      fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      const [webLinks, webgl, image, typeahead] = enhancements;
+      if (webLinks.status === "fulfilled") {
+        terminal.loadAddon(new webLinks.value.WebLinksAddon());
+      }
+      if (image.status === "fulfilled") {
+        terminal.loadAddon(new image.value.ImageAddon({ enableSizeReports: false }));
+      }
+      if (typeahead.status === "fulfilled") {
+        const addon = new typeahead.value.TypeAheadAddon();
+        terminal.loadAddon(addon);
+        addon.reset();
+      }
+      if (webgl.status === "fulfilled") {
+        try {
+          terminal.loadAddon(new webgl.value.WebglAddon());
+        } catch (error) {
+          console.warn("WebGL terminal renderer unavailable; using DOM renderer", error);
+        }
+      }
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (
+          (isMac && event.metaKey && !event.ctrlKey && !event.altKey) ||
+          (!isMac && !event.metaKey && event.ctrlKey && !event.altKey)
+        ) {
+          if (event.key === "ArrowLeft") {
+            dispatch("input", { id: shell.id, data: "\u0001" });
+            return false;
+          }
+          if (event.key === "ArrowRight") {
+            dispatch("input", { id: shell.id, data: "\u0005" });
+            return false;
+          }
+          if (event.key === "Backspace") {
+            dispatch("input", { id: shell.id, data: "\u0015" });
+            return false;
+          }
+        }
+        return true;
+      });
+      terminal.open(termEl);
+      terminalReady = true;
+      terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
+      terminal.onData((data) => dispatch("input", { id: shell.id, data }));
+      // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
+      // available after open(), so use native focus events instead.
+      terminal.textarea?.addEventListener("focus", () => dispatch("focus", { id: shell.id }));
+      terminal.textarea?.addEventListener("blur", () => dispatch("blur", { id: shell.id }));
+
+      await tick();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (!disposed) fitAndReport(true);
+    } catch (error) {
+      if (!disposed) {
+        terminalError = "Unable to load terminal features. Check your connection and try again.";
+        console.error("terminal initialization failed", error);
+      }
+    }
+  }
+
+  onMount(() => {
+    void initializeTerminal();
   });
 
   onDestroy(() => {
+    disposed = true;
     terminal?.dispose();
   });
 </script>
@@ -136,5 +211,12 @@
     class="overflow-hidden px-4 py-2"
     bind:this={termEl}
     style="width: {shell.width || 760}px; height: {shell.height || 420}px;"
-  ></div>
+  >
+    {#if terminalError}
+      <div class="grid h-full place-items-center gap-3 text-sm text-zinc-300">
+        <span>{terminalError}</span>
+        <button class="rounded bg-zinc-700 px-3 py-1.5 hover:bg-zinc-600" on:click={initializeTerminal}>Retry</button>
+      </div>
+    {/if}
+  </div>
 </WindowFrame>
