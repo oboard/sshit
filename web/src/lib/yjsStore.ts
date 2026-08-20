@@ -32,8 +32,6 @@ export const ydoc = new Y.Doc();
 export const drawingShapes = ydoc.getMap<DrawingShape>("drawing-shapes");
 export const collabWindowMap = ydoc.getMap<CollabWindowState>("collab-windows");
 
-const initialMarkdown = `# 协作文档\n\n这是一个独立的 Markdown 窗口文档。每个编辑器窗口都有自己的内容，并通过 Yjs 与所有协作者同步。\n\n- 移动或缩放窗口会同步\n- 在绘画模式中画到窗口上的线条会跟着窗口移动\n`;
-
 const initializedDocs = new Set<string>();
 
 export function markdownTextForDoc(docId: string) {
@@ -45,6 +43,6 @@ export function ensureDefaultDocument(docId: string) {
   initializedDocs.add(docId);
   const text = markdownTextForDoc(docId);
   if (text.length === 0) {
-    text.insert(0, initialMarkdown);
+    text.insert(0, "");
   }
 }

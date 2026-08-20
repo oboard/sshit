@@ -71,6 +71,7 @@
   let settingsOpen = false;
   let showNetworkInfo = false;
   let collabWindows: CollabWindowState[] = [];
+  let focusedCollabWindowID = -1;
   let drawingMode = false;
   let drawingColor = "#f472b6";
   let drawingStrokeWidth = 4;
@@ -394,10 +395,12 @@
   }
 
   function focusCollabWindow(id: number) {
+    focusedCollabWindowID = id;
     patchCollabWindow(id, { zIndex: ++topZ });
   }
 
   function closeCollabWindow(id: number) {
+    if (focusedCollabWindowID === id) focusedCollabWindowID = -1;
     collabWindowMap.delete(collabWindowKey(id));
   }
 
@@ -675,6 +678,7 @@
       <CollabWindow
         {windowState}
         zIndex={windowState.zIndex ?? 1}
+        focused={focusedCollabWindowID === windowState.id}
         activeUsers={users.length || 1}
         synced={collabStatus === "connected"}
         on:focus={(event) => focusCollabWindow(event.detail.id)}
