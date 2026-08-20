@@ -272,6 +272,52 @@
     ];
   }
 
+  function makeDrawingId() {
+    return `${Date.now().toString(36)}-${clientID}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function anchorOrigin(anchor: DrawingAnchor): [number, number] {
+    if (anchor.kind === "collabWindow") {
+      const window = collabWindows.find((item) => item.id === anchor.id);
+      return [window?.x ?? 0, window?.y ?? 0];
+    }
+    if (anchor.kind === "shell") {
+      const shell = shells.find((item) => item.id === anchor.id);
+      return [shell?.x ?? 0, shell?.y ?? 0];
+    }
+    return [0, 0];
+  }
+
+  function drawingAnchorAt(x: number, y: number): DrawingAnchor {
+    const collabHit = [...collabWindows]
+      .sort((a, b) => (b.zIndex ?? 1) - (a.zIndex ?? 1))
+      .find((window) => x >= window.x && x <= window.x + window.width && y >= window.y && y <= window.y + window.height);
+    if (collabHit) return { kind: "collabWindow", id: collabHit.id };
+
+    const shellHit = [...shells]
+      .sort((a, b) => (zOrder[b.id] ?? 1) - (zOrder[a.id] ?? 1))
+      .find((shell) => x >= shell.x && x <= shell.x + (shell.width || 760) && y >= shell.y && y <= shell.y + (shell.height || 420) + 42);
+    if (shellHit) return { kind: "shell", id: shellHit.id };
+
+    return { kind: "world" };
+  }
+
+  function pointForAnchor(anchor: DrawingAnchor, x: number, y: number): [number, number] {
+    const [originX, originY] = anchorOrigin(anchor);
+    return [x - originX, y - originY];
+  }
+
+  function pathData(shape: DrawingShape) {
+    const [originX, originY] = anchorOrigin(shape.anchor);
+    return shape.points
+      .map((point, index) => {
+        const screenX = (originX + point[0]) * zoom + viewportX;
+        const screenY = (originY + point[1]) * zoom + viewportY;
+        return `${index === 0 ? "M" : "L"} ${screenX} ${screenY}`;
+      })
+      .join(" ");
+  }
+
   function submitPassword() {
     if (!password) return;
     send({ type: "auth", password });
@@ -400,6 +446,7 @@
 
   function startPan(event: MouseEvent) {
     if (event.button !== 0) return;
+    if (drawingMode) return;
     const target = event.target as HTMLElement;
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
@@ -408,7 +455,49 @@
     panOrigin = [viewportX, viewportY];
   }
 
+  function startCanvasDrawing(event: PointerEvent) {
+    if (!drawingMode || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const [worldX, worldY] = screenToWorld(event.clientX, event.clientY);
+    activeDrawingAnchor = drawingAnchorAt(worldX, worldY);
+    const point = pointForAnchor(activeDrawingAnchor, worldX, worldY);
+    draftShape = {
+      id: makeDrawingId(),
+      type: "path",
+      anchor: activeDrawingAnchor,
+      x: point[0],
+      y: point[1],
+      color: drawingColor,
+      strokeWidth: drawingStrokeWidth,
+      points: [point],
+      createdBy: clientID,
+    };
+    drawing = true;
+  }
+
+  function continueCanvasDrawing(event: PointerEvent) {
+    if (!drawingMode || !drawing || !draftShape) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const [worldX, worldY] = screenToWorld(event.clientX, event.clientY);
+    const point = pointForAnchor(activeDrawingAnchor, worldX, worldY);
+    draftShape = { ...draftShape, points: [...draftShape.points, point] };
+  }
+
+  function finishCanvasDrawing(event?: PointerEvent) {
+    if (!drawing) return;
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (draftShape && draftShape.points.length > 1) {
+      drawingShapes.set(draftShape.id, draftShape);
+    }
+    draftShape = null;
+    drawing = false;
+  }
+
   function handleWheel(event: WheelEvent) {
+    if (drawingMode) return;
     event.preventDefault();
     const rect = fabricEl.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
@@ -426,6 +515,8 @@
       const [x, y] = screenToWorld(event.clientX, event.clientY);
       send({ type: "cursor", x, y });
     }
+
+    if (drawingMode) return;
 
     if (panning) {
       viewportX = Math.round(panOrigin[0] + event.clientX - panStart[0]);
@@ -499,7 +590,9 @@
 
   onMount(() => {
     refreshCollabWindows();
+    refreshShapes();
     collabWindowMap.observe(refreshCollabWindows);
+    drawingShapes.observe(refreshShapes);
     collabConnection = new CollabConnection((status) => {
       collabStatus = status;
       if (status === "auth-failed") {
@@ -524,6 +617,7 @@
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
     collabWindowMap.unobserve(refreshCollabWindows);
+    drawingShapes.unobserve(refreshShapes);
     collabConnection?.destroy();
     socket?.close();
   });
@@ -547,13 +641,14 @@
   on:mouseleave={stopMove}
   on:wheel={handleWheel}
 >
-  <div class="absolute top-4 left-4 z-[10000]">
+  <div class="absolute top-4 left-4 z-[12000]">
     <Toolbar
       {connected}
       hasWriteAccess={true}
+      {drawingMode}
       on:create={createShell}
-      on:createEditor={() => createCollabWindow("editor")}
-      on:createDrawing={() => createCollabWindow("drawing")}
+      on:createEditor={createCollabWindow}
+      on:toggleDrawing={() => (drawingMode = !drawingMode)}
       on:settings={() => (settingsOpen = true)}
       on:networkInfo={() => (showNetworkInfo = !showNetworkInfo)}
     />
@@ -574,7 +669,7 @@
     </div>
   {/if}
 
-  <div data-pan-surface class="absolute inset-0 cursor-grab bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]">
+  <div data-pan-surface class="absolute inset-0 cursor-grab bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]" class:cursor-crosshair={drawingMode}>
     <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
     <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
 
@@ -584,7 +679,6 @@
         {windowState}
         zIndex={windowState.zIndex ?? 1}
         activeUsers={users.length || 1}
-        userId={clientID}
         synced={collabStatus === "connected"}
         on:focus={(event) => focusCollabWindow(event.detail.id)}
         on:startMove={(event) => startCollabWindowMove(event.detail.id, event.detail.event)}
@@ -617,6 +711,53 @@
     </div>
   </div>
 
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <svg
+    class="drawing-overlay"
+    role="application"
+    class:drawing-active={drawingMode}
+    on:pointerdown={startCanvasDrawing}
+    on:pointermove={continueCanvasDrawing}
+    on:pointerup={finishCanvasDrawing}
+    on:pointercancel={finishCanvasDrawing}
+    on:pointerleave={finishCanvasDrawing}
+    aria-label="Collaborative drawing overlay"
+  >
+    {#each shapes as shape (shape.id)}
+      <path
+        d={pathData(shape)}
+        fill="none"
+        stroke={shape.color}
+        stroke-width={shape.strokeWidth * zoom}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    {/each}
+    {#if draftShape}
+      <path
+        d={pathData(draftShape)}
+        fill="none"
+        stroke={draftShape.color}
+        stroke-width={draftShape.strokeWidth * zoom}
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        opacity="0.9"
+      />
+    {/if}
+  </svg>
+
+  {#if drawingMode}
+    <div class="fixed bottom-4 right-4 z-[12000] flex items-center gap-3 rounded-full border border-indigo-400/30 bg-zinc-950/90 px-4 py-2 text-xs text-zinc-200 shadow-2xl" data-no-pan>
+      <span class="font-medium text-indigo-200">Drawing mode</span>
+      <input type="color" bind:value={drawingColor} aria-label="Drawing color" />
+      <label class="flex items-center gap-2 text-zinc-400">
+        width
+        <input class="w-20 accent-indigo-500" type="range" min="2" max="12" bind:value={drawingStrokeWidth} />
+      </label>
+      <button class="rounded bg-zinc-800 px-2 py-1 hover:bg-zinc-700" on:click={() => (drawingMode = false)}>Pointer</button>
+    </div>
+  {/if}
+
   {#if authRequired && !authenticated}
     <div class="fixed inset-0 z-[20000] grid place-items-center bg-black/40 backdrop-blur-sm">
       <form class="panel w-[min(92vw,420px)] p-6" on:submit|preventDefault={submitPassword}>
@@ -641,3 +782,14 @@
 
   <Settings open={settingsOpen} on:close={() => (settingsOpen = false)} />
 </main>
+
+<style lang="postcss">
+  .drawing-overlay {
+    @apply pointer-events-none fixed inset-0 z-[11000] h-full w-full;
+  }
+
+  .drawing-overlay.drawing-active {
+    @apply pointer-events-auto;
+    cursor: crosshair;
+  }
+</style>

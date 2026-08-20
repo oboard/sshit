@@ -10,7 +10,6 @@
   export let windowState: CollabWindowState;
   export let zIndex = 1;
   export let activeUsers = 1;
-  export let userId = 0;
   export let synced = false;
 
   const dispatch = createEventDispatcher<{
