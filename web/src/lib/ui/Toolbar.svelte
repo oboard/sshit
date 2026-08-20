@@ -1,7 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import {
-    MessageSquareIcon,
+    FileTextIcon,
+    PenToolIcon,
     PlusCircleIcon,
     SettingsIcon,
     WifiIcon,
@@ -9,11 +10,12 @@
 
   export let connected: boolean;
   export let hasWriteAccess: boolean | undefined;
-  export let newMessages: boolean;
+  export let drawingMode = false;
 
   const dispatch = createEventDispatcher<{
     create: void;
-    chat: void;
+    createEditor: void;
+    toggleDrawing: void;
     settings: void;
     networkInfo: void;
   }>();
@@ -40,11 +42,11 @@
       >
         <PlusCircleIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="icon-button" on:click={() => dispatch("chat")}>
-        <MessageSquareIcon strokeWidth={1.5} class="p-0.5" />
-        {#if newMessages}
-          <div class="activity"></div>
-        {/if}
+      <button class="icon-button" on:click={() => dispatch("createEditor")} title="Create Markdown editor window">
+        <FileTextIcon strokeWidth={1.5} class="p-0.5" />
+      </button>
+      <button class="icon-button" class:active={drawingMode} on:click={() => dispatch("toggleDrawing")} title={drawingMode ? "Switch to pointer mode" : "Switch to drawing mode"}>
+        <PenToolIcon strokeWidth={1.5} class="p-0.5" />
       </button>
       <button class="icon-button" on:click={() => dispatch("settings")}>
         <SettingsIcon strokeWidth={1.5} class="p-0.5" />
@@ -71,7 +73,8 @@
     @apply disabled:opacity-50 disabled:bg-transparent;
   }
 
-  .activity {
-    @apply absolute top-1 right-0.5 text-xs p-[4.5px] bg-red-500 rounded-full;
+  .icon-button.active {
+    @apply bg-indigo-600/30 text-white ring-1 ring-indigo-400/40;
   }
+
 </style>

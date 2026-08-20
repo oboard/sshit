@@ -5,15 +5,24 @@
 
   import Avatars from "$lib/ui/Avatars.svelte";
   import ChooseName from "$lib/ui/ChooseName.svelte";
+  import CollabWindow from "$lib/ui/CollabWindow.svelte";
   import LiveCursor from "$lib/ui/LiveCursor.svelte";
   import NameList from "$lib/ui/NameList.svelte";
   import NetworkInfo from "$lib/ui/NetworkInfo.svelte";
   import Settings from "$lib/ui/Settings.svelte";
   import ToastContainer from "$lib/ui/ToastContainer.svelte";
   import Toolbar from "$lib/ui/Toolbar.svelte";
+  import { CollabConnection, type CollabStatus } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
   import type { WsUser } from "$lib/protocol";
+  import {
+    collabWindowMap,
+    drawingShapes,
+    type CollabWindowState,
+    type DrawingAnchor,
+    type DrawingShape,
+  } from "$lib/yjsStore";
 
   import { arrangeNewTerminal } from "./arrange";
   import WebTerm, { type Shell } from "./WebTerm.svelte";
@@ -61,6 +70,16 @@
   let topZ = 1;
   let settingsOpen = false;
   let showNetworkInfo = false;
+  let collabWindows: CollabWindowState[] = [];
+  let drawingMode = false;
+  let drawingColor = "#f472b6";
+  let drawingStrokeWidth = 4;
+  let shapes: DrawingShape[] = [];
+  let draftShape: DrawingShape | null = null;
+  let drawing = false;
+  let activeDrawingAnchor: DrawingAnchor = { kind: "world" };
+  let collabStatus: CollabStatus = "disconnected";
+  let collabConnection: CollabConnection | null = null;
   let serverLatency: number | null = null;
   let shellLatency: number | null = 0;
   let pingTimer: number | undefined;
@@ -75,9 +94,11 @@
   let panOrigin = [0, 0];
 
   let movingShellID = -1;
+  let movingCollabWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
   let resizingShellID = -1;
+  let resizingCollabWindowID = -1;
   let resizingStart = [0, 0];
   let resizingOrigin = [0, 0];
 
@@ -92,6 +113,33 @@
   ]) as [number, WsUser][];
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
+
+  function refreshCollabWindows() {
+    collabWindows = Array.from(collabWindowMap.values()).sort((a, b) => a.id - b.id);
+    const highestSharedZ = collabWindows.reduce((max, window) => Math.max(max, window.zIndex || 1), 1);
+    if (highestSharedZ > topZ) topZ = highestSharedZ;
+  }
+
+  function refreshShapes() {
+    shapes = Array.from(drawingShapes.values())
+      .filter((shape) => shape.type === "path" && Array.isArray(shape.points))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  function collabWindowKey(id: number) {
+    return String(id);
+  }
+
+  function upsertCollabWindow(window: CollabWindowState) {
+    collabWindowMap.set(collabWindowKey(window.id), window);
+  }
+
+  function patchCollabWindow(id: number, patch: Partial<CollabWindowState>) {
+    const current = collabWindowMap.get(collabWindowKey(id));
+    if (!current) return;
+    upsertCollabWindow({ ...current, ...patch });
+  }
+
   $: if (authRequired && !authenticated && passwordInputEl) {
     tick().then(() => passwordInputEl?.focus());
   }
@@ -184,8 +232,10 @@
         authenticated = true;
         connected = true;
         authError = "";
+        const collabPassword = password;
         password = "";
         makeToast({ kind: "success", message: "Connected to sshit." });
+        collabConnection?.connect(collabPassword);
         if ($settings.name) {
           send({ type: "setName", name: $settings.name });
           lastSentName = $settings.name;
@@ -255,13 +305,25 @@
     requestAnimationFrame(frame);
   }
 
+  function existingWindows() {
+    return [
+      ...shells.map((shell) => ({
+        x: shell.x,
+        y: shell.y,
+        width: shell.width || 760,
+        height: shell.height || 420,
+      })),
+      ...collabWindows.map((window) => ({
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+      })),
+    ];
+  }
+
   function createShell() {
-    const existing = shells.map((shell) => ({
-      x: shell.x,
-      y: shell.y,
-      width: shell.width || 760,
-      height: shell.height || 420,
-    }));
+    const existing = existingWindows();
     const { x, y } = arrangeNewTerminal(existing);
     send({
       type: "create",
@@ -273,9 +335,27 @@
     moveCanvasTo(x, y, 1);
   }
 
+  function createCollabWindow() {
+    const width = 980;
+    const height = 620;
+    const { x, y } = arrangeNewTerminal(existingWindows());
+    const id = Date.now() * 1000 + clientID;
+    const zIndex = ++topZ;
+    upsertCollabWindow({ id, docId: `doc-${id.toString(36)}`, kind: "editor", x, y, width, height, zIndex });
+    moveCanvasTo(x, y, 1);
+  }
+
   function focusShell(id: number) {
     zOrder[id] = ++topZ;
     zOrder = zOrder;
+  }
+
+  function focusCollabWindow(id: number) {
+    patchCollabWindow(id, { zIndex: ++topZ });
+  }
+
+  function closeCollabWindow(id: number) {
+    collabWindowMap.delete(collabWindowKey(id));
   }
 
   function startMove(id: number, event: MouseEvent) {
@@ -284,14 +364,36 @@
     const shell = shells.find((shell) => shell.id === id);
     if (!shell) return;
     movingShellID = id;
+    movingCollabWindowID = -1;
     movingStart = [event.clientX, event.clientY];
     movingOrigin = [shell.x, shell.y];
+  }
+
+  function startCollabWindowMove(id: number, event: MouseEvent) {
+    event.preventDefault();
+    focusCollabWindow(id);
+    const window = collabWindows.find((window) => window.id === id);
+    if (!window) return;
+    movingCollabWindowID = id;
+    movingShellID = -1;
+    movingStart = [event.clientX, event.clientY];
+    movingOrigin = [window.x, window.y];
   }
 
   function startResize(id: number, event: MouseEvent, width: number, height: number) {
     event.preventDefault();
     focusShell(id);
     resizingShellID = id;
+    resizingCollabWindowID = -1;
+    resizingStart = [event.clientX, event.clientY];
+    resizingOrigin = [width, height];
+  }
+
+  function startCollabWindowResize(id: number, event: MouseEvent, width: number, height: number) {
+    event.preventDefault();
+    focusCollabWindow(id);
+    resizingCollabWindowID = id;
+    resizingShellID = -1;
     resizingStart = [event.clientX, event.clientY];
     resizingOrigin = [width, height];
   }
@@ -347,12 +449,26 @@
       return;
     }
 
+    if (resizingCollabWindowID !== -1) {
+      const width = Math.max(520, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
+      const height = Math.max(360, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
+      patchCollabWindow(resizingCollabWindowID, { width, height });
+      return;
+    }
+
     if (movingShellID !== -1) {
       const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
       const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
       shells = shells.map((shell) =>
         shell.id === movingShellID ? { ...shell, x, y } : shell,
       );
+      return;
+    }
+
+    if (movingCollabWindowID !== -1) {
+      const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
+      const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
+      patchCollabWindow(movingCollabWindowID, { x, y });
     }
   }
 
@@ -368,14 +484,28 @@
       }
       resizingShellID = -1;
     }
+    if (resizingCollabWindowID !== -1) {
+      resizingCollabWindowID = -1;
+    }
     if (movingShellID !== -1) {
       const shell = shells.find((shell) => shell.id === movingShellID);
       if (shell) send({ type: "move", id: shell.id, x: shell.x, y: shell.y });
       movingShellID = -1;
     }
+    if (movingCollabWindowID !== -1) {
+      movingCollabWindowID = -1;
+    }
   }
 
   onMount(() => {
+    refreshCollabWindows();
+    collabWindowMap.observe(refreshCollabWindows);
+    collabConnection = new CollabConnection((status) => {
+      collabStatus = status;
+      if (status === "auth-failed") {
+        makeToast({ kind: "error", message: "Collaborative workspace authentication failed." });
+      }
+    });
     connect();
     pingTimer = window.setInterval(() => {
       const start = performance.now();
@@ -393,6 +523,8 @@
     manualClose = true;
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
+    collabWindowMap.unobserve(refreshCollabWindows);
+    collabConnection?.destroy();
     socket?.close();
   });
 </script>
@@ -419,9 +551,9 @@
     <Toolbar
       {connected}
       hasWriteAccess={true}
-      newMessages={false}
       on:create={createShell}
-      on:chat={() => makeToast({ kind: "info", message: "Chat is not enabled in sshit yet." })}
+      on:createEditor={() => createCollabWindow("editor")}
+      on:createDrawing={() => createCollabWindow("drawing")}
       on:settings={() => (settingsOpen = true)}
       on:networkInfo={() => (showNetworkInfo = !showNetworkInfo)}
     />
@@ -447,6 +579,20 @@
     <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
+    {#each collabWindows as windowState (windowState.id)}
+      <CollabWindow
+        {windowState}
+        zIndex={windowState.zIndex ?? 1}
+        activeUsers={users.length || 1}
+        userId={clientID}
+        synced={collabStatus === "connected"}
+        on:focus={(event) => focusCollabWindow(event.detail.id)}
+        on:startMove={(event) => startCollabWindowMove(event.detail.id, event.detail.event)}
+        on:startResize={(event) => startCollabWindowResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
+        on:close={(event) => closeCollabWindow(event.detail.id)}
+      />
+    {/each}
+
     {#each shells as shell (shell.id)}
       <WebTerm
         bind:this={termRefs[shell.id]}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -211,6 +212,7 @@ type wsEnvelope struct {
 	Rows     uint16          `json:"rows,omitempty"`
 	Data     string          `json:"data,omitempty"`
 	Password string          `json:"password,omitempty"`
+	Update   string          `json:"update,omitempty"`
 	Users    []webUser       `json:"users"`
 	Shells   []webShellState `json:"shells"`
 	User     *webUser        `json:"user,omitempty"`
@@ -253,20 +255,30 @@ type webClient struct {
 	hub           *webHub
 }
 
+type collabClient struct {
+	conn          *websocket.Conn
+	send          chan []byte
+	authenticated bool
+	closed        bool
+}
+
 type webHub struct {
-	mu       sync.Mutex
-	nextID   int
-	clients  map[int]*webClient
-	shells   map[int]*webShell
-	shellSeq int
-	password string
+	mu            sync.Mutex
+	nextID        int
+	clients       map[int]*webClient
+	shells        map[int]*webShell
+	shellSeq      int
+	password      string
+	collabClients map[*collabClient]bool
+	collabUpdates [][]byte
 }
 
 func newWebHub(password string) *webHub {
 	return &webHub{
-		clients:  make(map[int]*webClient),
-		shells:   make(map[int]*webShell),
-		password: password,
+		clients:       make(map[int]*webClient),
+		shells:        make(map[int]*webShell),
+		password:      password,
+		collabClients: make(map[*collabClient]bool),
 	}
 }
 
@@ -412,6 +424,101 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+func (h *webHub) addCollabClient(client *collabClient) [][]byte {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.collabClients[client] = true
+	updates := make([][]byte, len(h.collabUpdates))
+	for i, update := range h.collabUpdates {
+		updates[i] = append([]byte(nil), update...)
+	}
+	return updates
+}
+
+func (h *webHub) removeCollabClient(client *collabClient) {
+	h.mu.Lock()
+	if _, ok := h.collabClients[client]; ok {
+		delete(h.collabClients, client)
+	}
+	if !client.closed {
+		client.closed = true
+		close(client.send)
+	}
+	h.mu.Unlock()
+}
+
+func (h *webHub) broadcastCollabUpdate(sender *collabClient, update []byte) {
+	h.mu.Lock()
+	stored := append([]byte(nil), update...)
+	h.collabUpdates = append(h.collabUpdates, stored)
+	for client := range h.collabClients {
+		if client == sender {
+			continue
+		}
+		select {
+		case client.send <- stored:
+		default:
+			go h.removeCollabClient(client)
+		}
+	}
+	h.mu.Unlock()
+}
+
+func webSocketCollab(hub *webHub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("collab websocket upgrade failed: %v", err)
+			return
+		}
+		defer conn.Close()
+		conn.SetReadLimit(4 << 20)
+
+		client := &collabClient{conn: conn, send: make(chan []byte, 256)}
+		defer hub.removeCollabClient(client)
+
+		go func() {
+			for update := range client.send {
+				if err := conn.WriteMessage(websocket.BinaryMessage, update); err != nil {
+					return
+				}
+			}
+		}()
+
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			if !client.authenticated {
+				if messageType != websocket.TextMessage {
+					continue
+				}
+				var msg wsEnvelope
+				if err := json.Unmarshal(payload, &msg); err != nil || msg.Type != "auth" {
+					continue
+				}
+				if hub.password != "" && msg.Password != hub.password {
+					_ = conn.WriteJSON(wsEnvelope{Type: "authFailed"})
+					return
+				}
+				client.authenticated = true
+				updates := hub.addCollabClient(client)
+				_ = conn.WriteJSON(wsEnvelope{Type: "ready", ID: len(updates)})
+				for _, update := range updates {
+					client.send <- update
+				}
+				continue
+			}
+
+			if messageType == websocket.BinaryMessage && len(payload) > 0 {
+				hub.broadcastCollabUpdate(client, payload)
+			}
+		}
+	}
+}
+
 func webSocketShell(hub *webHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
@@ -527,8 +634,9 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 	files := http.FileServer(http.FS(dist))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", webSocketShell(hub))
+	mux.HandleFunc("/collab", webSocketCollab(hub))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/ws") {
+		if strings.HasPrefix(r.URL.Path, "/ws") || strings.HasPrefix(r.URL.Path, "/collab") {
 			http.NotFound(w, r)
 			return
 		}

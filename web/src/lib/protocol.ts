@@ -42,6 +42,5 @@ export type WsClient = {
   move?: [Sid, WsWinsize | null];
   data?: [Sid, Uint8Array, bigint];
   subscribe?: [Sid, number];
-  chat?: string;
   ping?: bigint;
 };
