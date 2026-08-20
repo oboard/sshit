@@ -33,6 +33,7 @@
     x: number;
     y: number;
     cursor: boolean;
+    cursorStyle?: string;
   };
 
   type Message = {
@@ -112,8 +113,9 @@
       cursor: user.cursor ? [user.x, user.y] : null,
       focus: null,
       canWrite: true,
-    } satisfies WsUser,
-  ]) as [number, WsUser][];
+      cursorStyle: user.cursorStyle,
+    } satisfies WsUser & { cursorStyle?: string },
+  ]) as [number, WsUser & { cursorStyle?: string }][];
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
 
@@ -693,8 +695,8 @@
     </div>
   {/if}
 
-  <div data-pan-surface class="absolute inset-0 cursor-grab bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]" class:cursor-crosshair={drawingMode}>
-    <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
+  <div data-pan-surface class="absolute inset-0 bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]" class:cursor-crosshair={drawingMode}>
+    <div class="absolute cursor-grab inset-0 opacity-20" style="background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
     <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">

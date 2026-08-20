@@ -575,7 +575,7 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 				}
 				hub.mu.Lock()
 				client.x, client.y = msg.X, msg.Y
-				user := webUser{ID: client.id, Name: client.name, X: client.x, Y: client.y, Cursor: true}
+				user := webUser{ID: client.id, Name: client.name, X: client.x, Y: client.y, Cursor: true, CursorStyle: msg.CursorStyle}
 				hub.mu.Unlock()
 				hub.broadcast(wsEnvelope{Type: "cursor", User: &user})
 			case "create":
