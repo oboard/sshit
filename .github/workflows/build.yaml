@@ -47,13 +47,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build frontend
         working-directory: web
         run: |
+          npm i -g pnpm
           pnpm install --frozen-lockfile
           pnpm run build
 
