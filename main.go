@@ -37,6 +37,40 @@ func defaultShell() string {
 	return shell
 }
 
+func terminalEnv(term string) []string {
+	if term == "" || term == "dumb" {
+		term = "xterm-256color"
+	}
+	env := os.Environ()
+	env = appendEnv(env, "TERM", term)
+	env = appendEnv(env, "COLORTERM", "truecolor")
+	env = appendEnv(env, "TERM_PROGRAM", "sshit")
+	env = removeEnv(env, "TERM_PROGRAM_VERSION")
+	return env
+}
+
+func appendEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func removeEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func hostKeyPath() (string, error) {
 	sshDir := filepath.Join(os.Getenv("HOME"), ".ssh")
 	if home, err := os.UserHomeDir(); err == nil {
@@ -167,6 +201,7 @@ func serveMux(listener net.Listener, sshServer *ssh.Server, httpServer *http.Ser
 func shellHandler(s ssh.Session) {
 	cmd := exec.Command(defaultShell())
 	ptyReq, winCh, isPty := s.Pty()
+	cmd.Env = terminalEnv(ptyReq.Term)
 
 	if !isPty {
 		io.WriteString(s, "PTY required\n")
@@ -204,9 +239,13 @@ type wsEnvelope struct {
 	Type        string          `json:"type"`
 	ID          int             `json:"id,omitempty"`
 	Name        string          `json:"name,omitempty"`
+	Color       string          `json:"color,omitempty"`
+	ClientID    string          `json:"clientId,omitempty"`
+	UserID      int             `json:"userId,omitempty"`
+	Awareness   json.RawMessage `json:"awareness,omitempty"`
 	X           int             `json:"x,omitempty"`
 	Y           int             `json:"y,omitempty"`
-	CursorStyle string         `json:"cursorStyle,omitempty"`
+	CursorStyle string          `json:"cursorStyle,omitempty"`
 	Width       int             `json:"width,omitempty"`
 	Height      int             `json:"height,omitempty"`
 	Cols        uint16          `json:"cols,omitempty"`
@@ -218,6 +257,30 @@ type wsEnvelope struct {
 	Shells      []webShellState `json:"shells"`
 	User        *webUser        `json:"user,omitempty"`
 	Shell       *webShellState  `json:"shell,omitempty"`
+
+	EditorWindows []editorWindowState `json:"editorWindows"`
+	EditorWindow  *editorWindowState  `json:"editorWindow,omitempty"`
+	Patch         *editorWindowPatch  `json:"patch,omitempty"`
+	WindowID      int64               `json:"windowId,omitempty"`
+}
+
+type editorWindowState struct {
+	ID     int64  `json:"id"`
+	DocID  string `json:"docId"`
+	Kind   string `json:"kind"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	ZIndex int    `json:"zIndex"`
+}
+
+type editorWindowPatch struct {
+	X      *int `json:"x,omitempty"`
+	Y      *int `json:"y,omitempty"`
+	Width  *int `json:"width,omitempty"`
+	Height *int `json:"height,omitempty"`
+	ZIndex *int `json:"zIndex,omitempty"`
 }
 
 type webUser struct {
@@ -257,22 +320,36 @@ type webClient struct {
 	hub           *webHub
 }
 
+type collabMessage struct {
+	messageType int
+	payload     []byte
+}
+
 type collabClient struct {
 	conn          *websocket.Conn
-	send          chan []byte
+	send          chan collabMessage
+	clientID      string
+	userID        int
+	name          string
+	color         string
+	awareness     json.RawMessage
 	authenticated bool
 	closed        bool
 }
 
+var collabColors = []string{"#f472b6", "#60a5fa", "#34d399", "#fbbf24", "#a78bfa", "#fb7185", "#22d3ee", "#fb923c"}
+
 type webHub struct {
 	mu            sync.Mutex
 	nextID        int
+	collabSeq     int
 	clients       map[int]*webClient
 	shells        map[int]*webShell
 	shellSeq      int
 	password      string
 	collabClients map[*collabClient]bool
 	collabUpdates [][]byte
+	editorWindows map[int64]*editorWindowState
 }
 
 func newWebHub(password string) *webHub {
@@ -281,12 +358,14 @@ func newWebHub(password string) *webHub {
 		shells:        make(map[int]*webShell),
 		password:      password,
 		collabClients: make(map[*collabClient]bool),
+		editorWindows: make(map[int64]*editorWindowState),
 	}
 }
 
-func (h *webHub) snapshotLocked() (users []webUser, shells []webShellState) {
+func (h *webHub) snapshotLocked() (users []webUser, shells []webShellState, editorWindows []editorWindowState) {
 	users = make([]webUser, 0, len(h.clients))
 	shells = make([]webShellState, 0, len(h.shells))
+	editorWindows = make([]editorWindowState, 0, len(h.editorWindows))
 	for _, c := range h.clients {
 		users = append(users, webUser{ID: c.id, Name: c.name, X: c.x, Y: c.y, Cursor: true})
 	}
@@ -295,7 +374,10 @@ func (h *webHub) snapshotLocked() (users []webUser, shells []webShellState) {
 		state.Buffer = string(s.buffer)
 		shells = append(shells, state)
 	}
-	return users, shells
+	for _, w := range h.editorWindows {
+		editorWindows = append(editorWindows, *w)
+	}
+	return users, shells, editorWindows
 }
 
 func (h *webHub) broadcast(msg wsEnvelope) {
@@ -311,9 +393,9 @@ func (h *webHub) broadcast(msg wsEnvelope) {
 
 func (h *webHub) broadcastState() {
 	h.mu.Lock()
-	users, shells := h.snapshotLocked()
+	users, shells, editorWindows := h.snapshotLocked()
 	h.mu.Unlock()
-	h.broadcast(wsEnvelope{Type: "state", Users: users, Shells: shells})
+	h.broadcast(wsEnvelope{Type: "state", Users: users, Shells: shells, EditorWindows: editorWindows})
 }
 
 func (h *webHub) addClient(conn *websocket.Conn) *webClient {
@@ -330,10 +412,10 @@ func (h *webHub) addClient(conn *websocket.Conn) *webClient {
 	if client.authenticated {
 		h.clients[client.id] = client
 	}
-	users, shells := h.snapshotLocked()
+	users, shells, editorWindows := h.snapshotLocked()
 	h.mu.Unlock()
 	if client.authenticated {
-		client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells}
+		client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells, EditorWindows: editorWindows}
 		h.broadcastState()
 	} else {
 		client.send <- wsEnvelope{Type: "authRequired"}
@@ -363,6 +445,7 @@ func (h *webHub) createShell(x, y int, cols, rows uint16) (*webShell, error) {
 		rows = 24
 	}
 	cmd := exec.Command(defaultShell())
+	cmd.Env = terminalEnv("xterm-256color")
 	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, err
@@ -422,26 +505,124 @@ func (h *webHub) shell(id int) *webShell {
 	return h.shells[id]
 }
 
+func (h *webHub) createEditorWindow(state editorWindowState) {
+	h.mu.Lock()
+	stored := state
+	h.editorWindows[state.ID] = &stored
+	h.mu.Unlock()
+	h.broadcast(wsEnvelope{Type: "editorWindowCreated", EditorWindow: &stored})
+}
+
+func (h *webHub) patchEditorWindow(id int64, patch editorWindowPatch) {
+	h.mu.Lock()
+	window, ok := h.editorWindows[id]
+	if ok {
+		if patch.X != nil {
+			window.X = *patch.X
+		}
+		if patch.Y != nil {
+			window.Y = *patch.Y
+		}
+		if patch.Width != nil {
+			window.Width = *patch.Width
+		}
+		if patch.Height != nil {
+			window.Height = *patch.Height
+		}
+		if patch.ZIndex != nil {
+			window.ZIndex = *patch.ZIndex
+		}
+	}
+	h.mu.Unlock()
+	if ok {
+		h.broadcast(wsEnvelope{Type: "editorWindowPatched", WindowID: id, Patch: &patch})
+	}
+}
+
+func (h *webHub) closeEditorWindow(id int64) {
+	h.mu.Lock()
+	_, ok := h.editorWindows[id]
+	if ok {
+		delete(h.editorWindows, id)
+	}
+	h.mu.Unlock()
+	if ok {
+		h.broadcast(wsEnvelope{Type: "editorWindowClosed", WindowID: id})
+	}
+}
+
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func (h *webHub) addCollabClient(client *collabClient) [][]byte {
+func (h *webHub) sendCollabJSON(client *collabClient, message wsEnvelope) bool {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return false
+	}
+	select {
+	case client.send <- collabMessage{messageType: websocket.TextMessage, payload: payload}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *webHub) addCollabClient(client *collabClient) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.collabClients[client] = true
-	updates := make([][]byte, len(h.collabUpdates))
-	for i, update := range h.collabUpdates {
-		updates[i] = append([]byte(nil), update...)
+
+	h.collabSeq++
+	client.clientID = fmt.Sprintf("collab-%d", h.collabSeq)
+	colorIndex := h.collabSeq - 1
+	if client.userID > 0 {
+		colorIndex = client.userID - 1
 	}
-	return updates
+	client.color = collabColors[colorIndex%len(collabColors)]
+
+	// Queue the complete history and ready marker before making this client
+	// visible to live broadcasts. The single writer goroutine preserves this
+	// exact order on the WebSocket.
+	for _, update := range h.collabUpdates {
+		copied := append([]byte(nil), update...)
+		select {
+		case client.send <- collabMessage{messageType: websocket.BinaryMessage, payload: copied}:
+		default:
+			return false
+		}
+	}
+	ready, err := json.Marshal(wsEnvelope{Type: "ready", ID: len(h.collabUpdates), ClientID: client.clientID, Name: client.name, Color: client.color})
+	if err != nil {
+		return false
+	}
+	select {
+	case client.send <- collabMessage{messageType: websocket.TextMessage, payload: ready}:
+	default:
+		return false
+	}
+	for other := range h.collabClients {
+		if len(other.awareness) == 0 || string(other.awareness) == "null" {
+			continue
+		}
+		payload, err := json.Marshal(wsEnvelope{
+			Type: "awareness", ClientID: other.clientID, Name: other.name, Color: other.color, Awareness: other.awareness,
+		})
+		if err != nil {
+			continue
+		}
+		select {
+		case client.send <- collabMessage{messageType: websocket.TextMessage, payload: payload}:
+		default:
+			return false
+		}
+	}
+	h.collabClients[client] = true
+	return true
 }
 
 func (h *webHub) removeCollabClient(client *collabClient) {
 	h.mu.Lock()
-	if _, ok := h.collabClients[client]; ok {
-		delete(h.collabClients, client)
-	}
+	delete(h.collabClients, client)
 	if !client.closed {
 		client.closed = true
 		close(client.send)
@@ -458,12 +639,42 @@ func (h *webHub) broadcastCollabUpdate(sender *collabClient, update []byte) {
 			continue
 		}
 		select {
-		case client.send <- stored:
+		case client.send <- collabMessage{messageType: websocket.BinaryMessage, payload: stored}:
 		default:
 			go h.removeCollabClient(client)
 		}
 	}
 	h.mu.Unlock()
+}
+
+func (h *webHub) broadcastCollabAwareness(sender *collabClient, awareness json.RawMessage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	sender.awareness = append(sender.awareness[:0], awareness...)
+	payload, err := json.Marshal(wsEnvelope{
+		Type: "awareness", ClientID: sender.clientID, Name: sender.name, Color: sender.color, Awareness: awareness,
+	})
+	if err != nil {
+		return
+	}
+	for client := range h.collabClients {
+		if client == sender {
+			continue
+		}
+		select {
+		case client.send <- collabMessage{messageType: websocket.TextMessage, payload: payload}:
+		default:
+			go h.removeCollabClient(client)
+		}
+	}
+}
+
+func (h *webHub) clearCollabAwareness(sender *collabClient) {
+	if sender.clientID == "" {
+		return
+	}
+	h.broadcastCollabAwareness(sender, json.RawMessage("null"))
 }
 
 func webSocketCollab(hub *webHub) http.HandlerFunc {
@@ -476,12 +687,13 @@ func webSocketCollab(hub *webHub) http.HandlerFunc {
 		defer conn.Close()
 		conn.SetReadLimit(4 << 20)
 
-		client := &collabClient{conn: conn, send: make(chan []byte, 256)}
+		client := &collabClient{conn: conn, send: make(chan collabMessage, 256)}
 		defer hub.removeCollabClient(client)
+		defer hub.clearCollabAwareness(client)
 
 		go func() {
-			for update := range client.send {
-				if err := conn.WriteMessage(websocket.BinaryMessage, update); err != nil {
+			for message := range client.send {
+				if err := conn.WriteMessage(message.messageType, message.payload); err != nil {
 					return
 				}
 			}
@@ -502,20 +714,30 @@ func webSocketCollab(hub *webHub) http.HandlerFunc {
 					continue
 				}
 				if hub.password != "" && msg.Password != hub.password {
-					_ = conn.WriteJSON(wsEnvelope{Type: "authFailed"})
+					_ = hub.sendCollabJSON(client, wsEnvelope{Type: "authFailed"})
+					return
+				}
+				client.name = msg.Name
+				client.userID = msg.UserID
+				if !hub.addCollabClient(client) {
 					return
 				}
 				client.authenticated = true
-				updates := hub.addCollabClient(client)
-				_ = conn.WriteJSON(wsEnvelope{Type: "ready", ID: len(updates)})
-				for _, update := range updates {
-					client.send <- update
-				}
 				continue
 			}
 
 			if messageType == websocket.BinaryMessage && len(payload) > 0 {
 				hub.broadcastCollabUpdate(client, payload)
+				continue
+			}
+			if messageType == websocket.TextMessage {
+				var msg wsEnvelope
+				if err := json.Unmarshal(payload, &msg); err != nil {
+					continue
+				}
+				if msg.Type == "awareness" {
+					hub.broadcastCollabAwareness(client, msg.Awareness)
+				}
 			}
 		}
 	}
@@ -557,9 +779,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					client.authenticated = true
 					hub.clients[client.id] = client
 				}
-				users, shells := hub.snapshotLocked()
+				users, shells, editorWindows := hub.snapshotLocked()
 				hub.mu.Unlock()
-				client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells}
+				client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells, EditorWindows: editorWindows}
 				hub.broadcastState()
 			case "setName":
 				if !client.authenticated {
@@ -622,6 +844,25 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					continue
 				}
 				hub.closeShell(msg.ID)
+			case "editorWindowCreate":
+				if !client.authenticated {
+					continue
+				}
+				if msg.EditorWindow != nil {
+					hub.createEditorWindow(*msg.EditorWindow)
+				}
+			case "editorWindowPatch":
+				if !client.authenticated {
+					continue
+				}
+				if msg.Patch != nil {
+					hub.patchEditorWindow(msg.WindowID, *msg.Patch)
+				}
+			case "editorWindowClose":
+				if !client.authenticated {
+					continue
+				}
+				hub.closeEditorWindow(msg.WindowID)
 			}
 		}
 	}

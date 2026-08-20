@@ -54,11 +54,11 @@
   </p>
 
   <div class="flex justify-between items-center mt-6">
-    <div class="ball filled"></div>
+    <div class="h-4 w-4 rounded-full border border-zinc-300 bg-zinc-600"></div>
     <div class="border-t-2 border-dashed border-zinc-600 w-32"></div>
-    <div class="ball" class:filled={status !== "no-server"}></div>
+    <div class={status !== "no-server" ? "h-4 w-4 rounded-full border border-zinc-300 bg-zinc-600" : "h-4 w-4 rounded-full border-2 border-zinc-600"}></div>
     <div class="border-t-2 border-dashed border-zinc-600 w-32"></div>
-    <div class="ball" class:filled={status === "connected"}></div>
+    <div class={status === "connected" ? "h-4 w-4 rounded-full border border-zinc-300 bg-zinc-600" : "h-4 w-4 rounded-full border-2 border-zinc-600"}></div>
   </div>
 
   <div class="flex justify-between items-center mt-2.5">
@@ -85,17 +85,3 @@
     <p class="text-xs text-zinc-300 w-8 text-right">Shell</p>
   </div>
 </div>
-
-<style lang="postcss">
-  .ball {
-    @apply rounded-full w-4 h-4;
-  }
-
-  .ball.filled {
-    @apply border border-zinc-300 bg-zinc-600;
-  }
-
-  .ball:not(.filled) {
-    @apply border-2 border-zinc-600;
-  }
-</style>

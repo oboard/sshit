@@ -28,7 +28,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
-  class="window-frame absolute select-none"
+  class="absolute inline-block select-none rounded-lg border border-zinc-700 opacity-90 shadow-2xl transition-opacity duration-200"
   class:focused
   style="transform: translate({x}px, {y}px); z-index: {zIndex}; background: {background};"
   data-no-pan
@@ -62,7 +62,7 @@
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="resize-handle"
+    class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
     role="separator"
     aria-label={resizeLabel}
     title={resizeLabel}
@@ -72,17 +72,11 @@
 </div>
 
 <style lang="postcss">
-  .window-frame {
-    @apply inline-block rounded-lg border border-zinc-700 opacity-90 shadow-2xl;
-    transition: opacity 200ms;
-  }
-
-  .window-frame.focused {
+  .focused {
     @apply opacity-100 ring-1 ring-indigo-500/50;
   }
 
   .resize-handle {
-    @apply absolute -bottom-1 -right-1 h-5 w-5 rounded-sm;
     cursor: se-resize;
     cursor: nwse-resize;
   }

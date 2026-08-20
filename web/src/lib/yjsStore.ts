@@ -2,7 +2,7 @@ import * as Y from "yjs";
 
 export type DrawingAnchor =
   | { kind: "world" }
-  | { kind: "collabWindow"; id: number }
+  | { kind: "editorWindow"; id: number }
   | { kind: "shell"; id: number };
 
 export type DrawingShape = {
@@ -17,20 +17,8 @@ export type DrawingShape = {
   createdBy?: number;
 };
 
-export type CollabWindowState = {
-  id: number;
-  docId: string;
-  kind: "editor";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  zIndex: number;
-};
-
 export const ydoc = new Y.Doc();
 export const drawingShapes = ydoc.getMap<DrawingShape>("drawing-shapes");
-export const collabWindowMap = ydoc.getMap<CollabWindowState>("collab-windows");
 
 const initializedDocs = new Set<string>();
 

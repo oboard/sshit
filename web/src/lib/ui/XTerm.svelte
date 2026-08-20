@@ -215,7 +215,7 @@
 </script>
 
 <div
-  class="term-container"
+  class="term-container inline-block rounded-lg border border-zinc-700 opacity-90 transition-[transform,opacity] duration-200"
   class:focused
   style:background={theme.background}
   on:mousedown={() => dispatch("bringToFront")}
@@ -267,11 +267,6 @@
 </div>
 
 <style lang="postcss">
-  .term-container {
-    @apply inline-block rounded-lg border border-zinc-700 opacity-90;
-    transition: transform 200ms, opacity 200ms;
-  }
-
   .term-container:not(.focused) :global(.xterm) {
     @apply cursor-default;
   }

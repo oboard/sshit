@@ -29,14 +29,14 @@
   on:close
 >
   <div class="flex flex-col gap-4">
-    <div class="item">
-      <div>
-        <p class="item-title">Name</p>
-        <p class="item-subtitle">Choose how you appear to other users.</p>
+    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+      <div class="flex-1">
+        <p class="mb-1 font-medium text-zinc-200">Name</p>
+        <p class="text-sm text-zinc-400">Choose how you appear to other users.</p>
       </div>
       <div>
         <input
-          class="input-common"
+          class="w-52 appearance-none rounded-md border border-zinc-700 bg-transparent px-3 py-2 text-sm outline-none transition-colors hover:bg-white/5 focus:ring-2 focus:ring-indigo-500/50"
           placeholder="Your name"
           bind:value={inputName}
           maxlength="50"
@@ -48,17 +48,17 @@
         />
       </div>
     </div>
-    <div class="item">
-      <div>
-        <p class="item-title">Color palette</p>
-        <p class="item-subtitle">Color theme for text in terminals.</p>
+    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+      <div class="flex-1">
+        <p class="mb-1 font-medium text-zinc-200">Color palette</p>
+        <p class="text-sm text-zinc-400">Color theme for text in terminals.</p>
       </div>
       <div class="relative">
         <ChevronDownIcon
           class="absolute top-[11px] right-2.5 w-4 h-4 text-zinc-400"
         />
         <select
-          class="input-common !pr-5"
+          class="w-52 appearance-none rounded-md border border-zinc-700 bg-transparent px-3 py-2 pr-5 text-sm outline-none transition-colors hover:bg-white/5 focus:ring-2 focus:ring-indigo-500/50"
           bind:value={inputTheme}
           on:change={() => updateSettings({ theme: inputTheme })}
         >
@@ -68,17 +68,17 @@
         </select>
       </div>
     </div>
-    <div class="item">
-      <div>
-        <p class="item-title">Scrollback</p>
-        <p class="item-subtitle">
+    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+      <div class="flex-1">
+        <p class="mb-1 font-medium text-zinc-200">Scrollback</p>
+        <p class="text-sm text-zinc-400">
           Lines of previous text displayed in the terminal window.
         </p>
       </div>
       <div>
         <input
           type="number"
-          class="input-common"
+          class="w-52 appearance-none rounded-md border border-zinc-700 bg-transparent px-3 py-2 text-sm outline-none transition-colors hover:bg-white/5 focus:ring-2 focus:ring-indigo-500/50"
           bind:value={inputScrollback}
           on:input={() => {
             if (inputScrollback >= 0) {
@@ -100,27 +100,3 @@
 
   <p class="mt-6 text-sm text-right text-zinc-400">sshit</p>
 </OverlayMenu>
-
-<style lang="postcss">
-  .item {
-    @apply bg-zinc-800/25 rounded-lg p-4 flex gap-4 flex-col sm:flex-row items-start;
-  }
-
-  .item > div:first-child {
-    @apply flex-1;
-  }
-
-  .item-title {
-    @apply font-medium text-zinc-200 mb-1;
-  }
-
-  .item-subtitle {
-    @apply text-sm text-zinc-400;
-  }
-
-  .input-common {
-    @apply w-52 px-3 py-2 text-sm rounded-md bg-transparent hover:bg-white/5;
-    @apply border border-zinc-700 outline-none focus:ring-2 focus:ring-indigo-500/50;
-    @apply appearance-none transition-colors;
-  }
-</style>

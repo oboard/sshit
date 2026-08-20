@@ -8,8 +8,11 @@ type AwarenessState = {
   anchor?: { kind: "docCursor"; docId: string };
   cursor?: number;
   selection?: [number, number];
-  name?: string;
-  color?: string;
+};
+
+type RemoteAwarenessState = AwarenessState & {
+  name: string;
+  color: string;
 };
 
 type StatusListener = (status: CollabStatus) => void;
@@ -33,9 +36,12 @@ export class CollabConnection {
   private reconnectTimer: number | undefined;
   private manualClose = false;
   private password = "";
+  private name = "";
+  private userID = 0;
+  private clientID = "";
   private statusListener: StatusListener;
   private updateHandler: (update: Uint8Array, origin: unknown) => void;
-  private awarenessMap = new Map<string, AwarenessState>();
+  private awarenessMap = new Map<string, RemoteAwarenessState>();
   private awarenessListeners = new Set<AwarenessListener>();
 
   constructor(statusListener: StatusListener) {
@@ -48,8 +54,10 @@ export class CollabConnection {
     ydoc.on("update", this.updateHandler);
   }
 
-  connect(password = "") {
+  connect(password = "", name = "", userID = 0) {
     this.password = password || this.password;
+    this.name = name || this.name;
+    this.userID = userID || this.userID;
     this.manualClose = false;
     this.statusListener("connecting");
     this.socket?.close();
@@ -59,23 +67,36 @@ export class CollabConnection {
     this.socket = socket;
 
     socket.onopen = () => {
-      socket.send(JSON.stringify({ type: "auth", password: this.password }));
+      socket.send(JSON.stringify({ type: "auth", password: this.password, name: this.name, userId: this.userID }));
     };
 
     socket.onmessage = (event) => {
       if (typeof event.data === "string") {
         try {
-          const message = JSON.parse(event.data) as { type?: string; id?: number; clientId?: string; awareness?: AwarenessState };
+          const message = JSON.parse(event.data) as {
+            type?: string;
+            id?: number;
+            clientId?: string;
+            name?: string;
+            color?: string;
+            awareness?: AwarenessState | null;
+          };
           if (message.type === "ready") {
-            if (!message.id && this.socket?.readyState === WebSocket.OPEN) {
-              this.socket.send(Y.encodeStateAsUpdate(ydoc));
-            }
+            this.clientID = message.clientId ?? "";
             this.statusListener("connected");
           } else if (message.type === "authFailed") {
             this.statusListener("auth-failed");
             socket.close();
-          } else if (message.type === "awareness" && message.clientId) {
-            this.awarenessMap.set(message.clientId, message.awareness ?? {});
+          } else if (message.type === "awareness" && message.clientId && message.clientId !== this.clientID) {
+            if (message.awareness) {
+              this.awarenessMap.set(message.clientId, {
+                ...message.awareness,
+                name: message.name || "anonymous",
+                color: message.color || "#818cf8",
+              });
+            } else {
+              this.awarenessMap.delete(message.clientId);
+            }
             this.notifyAwareness();
           }
         } catch (error) {
@@ -103,33 +124,24 @@ export class CollabConnection {
   }
 
   setAwareness(state: AwarenessState) {
-    const selfKey = "local";
-    this.awarenessMap.set(selfKey, state);
-    this.notifyAwareness();
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ type: "awareness", awareness: state }));
     }
   }
 
-  getDocCursors(docId: string): { position: number; color: string; name: string; selection?: [number, number] }[] {
-    const cursors: { position: number; color: string; name: string; selection?: [number, number] }[] = [];
-    for (const [, state] of this.awarenessMap) {
+  getDocCursors(docId: string): { clientId: string; position: number; color: string; name: string; selection?: [number, number] }[] {
+    const cursors: { clientId: string; position: number; color: string; name: string; selection?: [number, number] }[] = [];
+    for (const [clientId, state] of this.awarenessMap) {
       if (state.anchor?.kind === "docCursor" && state.anchor.docId === docId && state.cursor !== undefined) {
-        cursors.push({ position: state.cursor, color: state.color || "#818cf8", name: state.name || "anonymous", selection: state.selection });
+        cursors.push({ clientId, position: state.cursor, color: state.color || "#818cf8", name: state.name || "anonymous", selection: state.selection });
       }
     }
     return cursors.sort((a, b) => a.position - b.position);
   }
 
-  clearDocCursor(docId: string) {
-    const selfKey = "local";
-    const current = this.awarenessMap.get(selfKey);
-    if (current?.anchor?.docId === docId) {
-      this.awarenessMap.delete(selfKey);
-      this.notifyAwareness();
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify({ type: "awareness", awareness: null }));
-      }
+  clearDocCursor(_docId: string) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type: "awareness", awareness: null }));
     }
   }
 

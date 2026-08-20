@@ -21,7 +21,7 @@
 <div class="flex flex-row-reverse">
   {#each users as [id, user] (id)}
     <div
-      class="avatar"
+      class="mr-1 flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium first:mr-0"
       style:background="hsla({nameToHue(user.name)}, 80%, 30%, 90%)"
       transition:fade|local={{ duration: 200 }}
     >
@@ -29,10 +29,3 @@
     </div>
   {/each}
 </div>
-
-<style lang="postcss">
-  .avatar {
-    @apply w-7 h-7 rounded-full text-xs font-medium flex justify-center items-center;
-    @apply mr-1 first:mr-0;
-  }
-</style>

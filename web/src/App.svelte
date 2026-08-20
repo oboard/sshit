@@ -5,7 +5,7 @@
 
   import Avatars from "$lib/ui/Avatars.svelte";
   import ChooseName from "$lib/ui/ChooseName.svelte";
-  import CollabWindow from "$lib/ui/CollabWindow.svelte";
+  import EditorWindow from "$lib/ui/EditorWindow.svelte";
   import LiveCursor from "$lib/ui/LiveCursor.svelte";
   import NameList from "$lib/ui/NameList.svelte";
   import NetworkInfo from "$lib/ui/NetworkInfo.svelte";
@@ -16,10 +16,9 @@
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
   import type { WsUser } from "$lib/protocol";
+  import type { EditorWindowState } from "$lib/editorWindows";
   import {
-    collabWindowMap,
     drawingShapes,
-    type CollabWindowState,
     type DrawingAnchor,
     type DrawingShape,
   } from "$lib/yjsStore";
@@ -52,6 +51,10 @@
     shells?: Shell[];
     user?: ServerUser;
     shell?: Shell;
+    editorWindows?: EditorWindowState[];
+    editorWindow?: EditorWindowState;
+    windowId?: number;
+    patch?: Partial<EditorWindowState>;
   };
 
   let fabricEl: HTMLDivElement;
@@ -71,9 +74,22 @@
   let topZ = 1;
   let settingsOpen = false;
   let showNetworkInfo = false;
-  let collabWindows: CollabWindowState[] = [];
+  let editorWindows: EditorWindowState[] = [];
   let focusedShellID = -1;
-  let focusedCollabWindowID = -1;
+  let focusedEditorWindowID = -1;
+  const drawingColors = [
+    { value: "#f472b6", name: "Pink" },
+    { value: "#a78bfa", name: "Purple" },
+    { value: "#60a5fa", name: "Blue" },
+    { value: "#34d399", name: "Green" },
+    { value: "#fbbf24", name: "Amber" },
+    { value: "#f8fafc", name: "White" },
+  ];
+  const drawingWidths = [
+    { value: 2, name: "Fine" },
+    { value: 4, name: "Medium" },
+    { value: 8, name: "Bold" },
+  ];
   let drawingMode = false;
   let drawingColor = "#f472b6";
   let drawingStrokeWidth = 4;
@@ -99,7 +115,7 @@
   type ResizeTarget = { kind: "shell" | "collab"; id: number } | null;
 
   let movingShellID = -1;
-  let movingCollabWindowID = -1;
+  let movingEditorWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
   let resizeTarget: ResizeTarget = null;
@@ -119,30 +135,30 @@
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
 
-  function refreshCollabWindows() {
-    collabWindows = Array.from(collabWindowMap.values()).sort((a, b) => a.id - b.id);
-    const highestSharedZ = collabWindows.reduce((max, window) => Math.max(max, window.zIndex || 1), 1);
+  function setEditorWindows(windows: EditorWindowState[]) {
+    editorWindows = [...windows].sort((a, b) => a.id - b.id);
+    const highestSharedZ = editorWindows.reduce((max, window) => Math.max(max, window.zIndex || 1), 1);
     if (highestSharedZ > topZ) topZ = highestSharedZ;
+  }
+
+  function upsertEditorWindow(window: EditorWindowState) {
+    setEditorWindows([...editorWindows.filter((item) => item.id !== window.id), window]);
+  }
+
+  function patchEditorWindowLocal(id: number, patch: Partial<EditorWindowState>) {
+    const current = editorWindows.find((item) => item.id === id);
+    if (!current) return;
+    upsertEditorWindow({ ...current, ...patch });
+  }
+
+  function removeEditorWindow(id: number) {
+    editorWindows = editorWindows.filter((item) => item.id !== id);
   }
 
   function refreshShapes() {
     shapes = Array.from(drawingShapes.values())
       .filter((shape) => shape.type === "path" && Array.isArray(shape.points))
       .sort((a, b) => a.id.localeCompare(b.id));
-  }
-
-  function collabWindowKey(id: number) {
-    return String(id);
-  }
-
-  function upsertCollabWindow(window: CollabWindowState) {
-    collabWindowMap.set(collabWindowKey(window.id), window);
-  }
-
-  function patchCollabWindow(id: number, patch: Partial<CollabWindowState>) {
-    const current = collabWindowMap.get(collabWindowKey(id));
-    if (!current) return;
-    upsertCollabWindow({ ...current, ...patch });
   }
 
   $: if (authRequired && !authenticated && passwordInputEl) {
@@ -204,6 +220,7 @@
         requestAnimationFrame(() => moveCanvasTo(shell.x, shell.y, 1));
       }
     }
+    if (message.editorWindows !== undefined) setEditorWindows(message.editorWindows);
   }
 
   function connect() {
@@ -240,7 +257,7 @@
         const collabPassword = password;
         password = "";
         makeToast({ kind: "success", message: "Connected to sshit." });
-        collabConn?.connect(collabPassword);
+        collabConn?.connect(collabPassword, $settings.name || `user-${message.id ?? 0}`, message.id ?? 0);
         if ($settings.name) {
           send({ type: "setName", name: $settings.name });
           lastSentName = $settings.name;
@@ -253,6 +270,12 @@
         users = [...users.filter((user) => user.id !== message.user!.id), message.user];
       } else if (message.type === "output" && message.id && message.data !== undefined) {
         outputs = { ...outputs, [message.id]: (outputs[message.id] ?? "") + message.data };
+      } else if (message.type === "editorWindowCreated" && message.editorWindow) {
+        upsertEditorWindow(message.editorWindow);
+      } else if (message.type === "editorWindowPatched" && message.windowId !== undefined && message.patch) {
+        patchEditorWindowLocal(message.windowId, message.patch);
+      } else if (message.type === "editorWindowClosed" && message.windowId !== undefined) {
+        removeEditorWindow(message.windowId);
       }
     };
 
@@ -282,8 +305,8 @@
   }
 
   function anchorOrigin(anchor: DrawingAnchor): [number, number] {
-    if (anchor.kind === "collabWindow") {
-      const window = collabWindows.find((item) => item.id === anchor.id);
+    if (anchor.kind === "editorWindow") {
+      const window = editorWindows.find((item) => item.id === anchor.id);
       return [window?.x ?? 0, window?.y ?? 0];
     }
     if (anchor.kind === "shell") {
@@ -294,10 +317,10 @@
   }
 
   function drawingAnchorAt(x: number, y: number): DrawingAnchor {
-    const collabHit = [...collabWindows]
+    const collabHit = [...editorWindows]
       .sort((a, b) => (b.zIndex ?? 1) - (a.zIndex ?? 1))
       .find((window) => x >= window.x && x <= window.x + window.width && y >= window.y && y <= window.y + window.height);
-    if (collabHit) return { kind: "collabWindow", id: collabHit.id };
+    if (collabHit) return { kind: "editorWindow", id: collabHit.id };
 
     const shellHit = [...shells]
       .sort((a, b) => (zOrder[b.id] ?? 1) - (zOrder[a.id] ?? 1))
@@ -360,7 +383,7 @@
         width: shell.width || 760,
         height: shell.height || 420,
       })),
-      ...collabWindows.map((window) => ({
+      ...editorWindows.map((window) => ({
         x: window.x,
         y: window.y,
         width: window.width,
@@ -382,32 +405,37 @@
     moveCanvasTo(x, y, 1);
   }
 
-  function createCollabWindow() {
+  function createEditorWindow() {
     const width = 980;
     const height = 620;
     const { x, y } = arrangeNewTerminal(existingWindows());
     const id = Date.now() * 1000 + clientID;
     const zIndex = ++topZ;
-    upsertCollabWindow({ id, docId: `doc-${id.toString(36)}`, kind: "editor", x, y, width, height, zIndex });
+    const window: EditorWindowState = { id, docId: `doc-${id.toString(36)}`, kind: "editor", x, y, width, height, zIndex };
+    send({ type: "editorWindowCreate", editorWindow: window });
+    upsertEditorWindow(window);
     moveCanvasTo(x, y, 1);
   }
 
   function focusShell(id: number) {
     focusedShellID = id;
-    focusedCollabWindowID = -1;
+    focusedEditorWindowID = -1;
     zOrder[id] = ++topZ;
     zOrder = zOrder;
   }
 
-  function focusCollabWindow(id: number) {
+  function focusEditorWindow(id: number) {
     focusedShellID = -1;
-    focusedCollabWindowID = id;
-    patchCollabWindow(id, { zIndex: ++topZ });
+    focusedEditorWindowID = id;
+    const zIndex = ++topZ;
+    send({ type: "editorWindowPatch", windowId: id, patch: { zIndex } });
+    patchEditorWindowLocal(id, { zIndex });
   }
 
-  function closeCollabWindow(id: number) {
-    if (focusedCollabWindowID === id) focusedCollabWindowID = -1;
-    collabWindowMap.delete(collabWindowKey(id));
+  function closeEditorWindow(id: number) {
+    if (focusedEditorWindowID === id) focusedEditorWindowID = -1;
+    send({ type: "editorWindowClose", windowId: id });
+    removeEditorWindow(id);
   }
 
   function startMove(id: number, event: MouseEvent) {
@@ -416,17 +444,17 @@
     const shell = shells.find((shell) => shell.id === id);
     if (!shell) return;
     movingShellID = id;
-    movingCollabWindowID = -1;
+    movingEditorWindowID = -1;
     movingStart = [event.clientX, event.clientY];
     movingOrigin = [shell.x, shell.y];
   }
 
-  function startCollabWindowMove(id: number, event: MouseEvent) {
+  function startEditorWindowMove(id: number, event: MouseEvent) {
     event.preventDefault();
-    focusCollabWindow(id);
-    const window = collabWindows.find((window) => window.id === id);
+    focusEditorWindow(id);
+    const window = editorWindows.find((window) => window.id === id);
     if (!window) return;
-    movingCollabWindowID = id;
+    movingEditorWindowID = id;
     movingShellID = -1;
     movingStart = [event.clientX, event.clientY];
     movingOrigin = [window.x, window.y];
@@ -437,7 +465,7 @@
     if (target.kind === "shell") {
       focusShell(target.id);
     } else {
-      focusCollabWindow(target.id);
+      focusEditorWindow(target.id);
     }
     resizeTarget = target;
     resizingStart = [event.clientX, event.clientY];
@@ -448,7 +476,7 @@
     startWindowResize({ kind: "shell", id }, event, width, height);
   }
 
-  function startCollabWindowResize(id: number, event: MouseEvent, width: number, height: number) {
+  function startEditorWindowResize(id: number, event: MouseEvent, width: number, height: number) {
     startWindowResize({ kind: "collab", id }, event, width, height);
   }
 
@@ -459,7 +487,7 @@
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
     focusedShellID = -1;
-    focusedCollabWindowID = -1;
+    focusedEditorWindowID = -1;
     panning = true;
     panStart = [event.clientX, event.clientY];
     panOrigin = [viewportX, viewportY];
@@ -469,6 +497,7 @@
     if (!drawingMode || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
+    (event.currentTarget as SVGSVGElement).setPointerCapture?.(event.pointerId);
     const [worldX, worldY] = screenToWorld(event.clientX, event.clientY);
     activeDrawingAnchor = drawingAnchorAt(worldX, worldY);
     const point = pointForAnchor(activeDrawingAnchor, worldX, worldY);
@@ -499,11 +528,36 @@
     if (!drawing) return;
     event?.preventDefault();
     event?.stopPropagation();
+    const target = event?.currentTarget as SVGSVGElement | null;
+    if (event && target?.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
     if (draftShape && draftShape.points.length > 1) {
       drawingShapes.set(draftShape.id, draftShape);
     }
     draftShape = null;
     drawing = false;
+  }
+
+  function undoLastDrawing() {
+    const latest = shapes
+      .filter((shape) => shape.createdBy === clientID)
+      .sort((a, b) => b.id.localeCompare(a.id))[0];
+    if (latest) drawingShapes.delete(latest.id);
+  }
+
+  function clearMyDrawings() {
+    for (const shape of shapes) {
+      if (shape.createdBy === clientID) drawingShapes.delete(shape.id);
+    }
+  }
+
+  function handleDrawingKeydown(event: KeyboardEvent) {
+    if (!drawingMode || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "Escape") {
+      drawingMode = false;
+      return;
+    }
+    if (event.key === "[") drawingStrokeWidth = Math.max(2, drawingStrokeWidth - 1);
+    if (event.key === "]") drawingStrokeWidth = Math.min(12, drawingStrokeWidth + 1);
   }
 
   function handleWheel(event: WheelEvent) {
@@ -569,7 +623,8 @@
           return next;
         });
       } else {
-        patchCollabWindow(resizeTarget.id, { width, height });
+        send({ type: "editorWindowPatch", windowId: resizeTarget.id, patch: { width, height } });
+        patchEditorWindowLocal(resizeTarget.id, { width, height });
       }
       return;
     }
@@ -583,10 +638,11 @@
       return;
     }
 
-    if (movingCollabWindowID !== -1) {
+    if (movingEditorWindowID !== -1) {
       const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
       const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
-      patchCollabWindow(movingCollabWindowID, { x, y });
+      send({ type: "editorWindowPatch", windowId: movingEditorWindowID, patch: { x, y } });
+      patchEditorWindowLocal(movingEditorWindowID, { x, y });
     }
   }
 
@@ -609,15 +665,13 @@
       if (shell) send({ type: "move", id: shell.id, x: shell.x, y: shell.y });
       movingShellID = -1;
     }
-    if (movingCollabWindowID !== -1) {
-      movingCollabWindowID = -1;
+    if (movingEditorWindowID !== -1) {
+      movingEditorWindowID = -1;
     }
   }
 
   onMount(() => {
-    refreshCollabWindows();
     refreshShapes();
-    collabWindowMap.observe(refreshCollabWindows);
     drawingShapes.observe(refreshShapes);
     collabConn = new CollabConnection((status) => {
       collabStatus = status;
@@ -642,7 +696,6 @@
     manualClose = true;
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
-    collabWindowMap.unobserve(refreshCollabWindows);
     drawingShapes.unobserve(refreshShapes);
     collabConn?.destroy();
     socket?.close();
@@ -650,6 +703,7 @@
 </script>
 
 <ToastContainer />
+<svelte:window on:keydown={handleDrawingKeydown} />
 {#if authenticated}
   <ChooseName />
 {/if}
@@ -673,7 +727,7 @@
       hasWriteAccess={true}
       {drawingMode}
       on:create={createShell}
-      on:createEditor={createCollabWindow}
+      on:createEditor={createEditorWindow}
       on:toggleDrawing={() => (drawingMode = !drawingMode)}
       on:settings={() => (settingsOpen = true)}
       on:networkInfo={() => (showNetworkInfo = !showNetworkInfo)}
@@ -700,17 +754,15 @@
     <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
-    {#each collabWindows as windowState (windowState.id)}
-      <CollabWindow
+    {#each editorWindows as windowState (windowState.id)}
+      <EditorWindow
         {windowState}
         zIndex={windowState.zIndex ?? 1}
-        focused={focusedCollabWindowID === windowState.id}
-        activeUsers={users.length || 1}
-        synced={collabStatus === "connected"}
-        on:focus={(event) => focusCollabWindow(event.detail.id)}
-        on:startMove={(event) => startCollabWindowMove(event.detail.id, event.detail.event)}
-        on:startResize={(event) => startCollabWindowResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
-        on:close={(event) => closeCollabWindow(event.detail.id)}
+        focused={focusedEditorWindowID === windowState.id}
+        on:focus={(event) => focusEditorWindow(event.detail.id)}
+        on:startMove={(event) => startEditorWindowMove(event.detail.id, event.detail.event)}
+        on:startResize={(event) => startEditorWindowResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
+        on:close={(event) => closeEditorWindow(event.detail.id)}
       />
     {/each}
 
@@ -726,6 +778,10 @@
         on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
         on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
         on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
+        on:resize={(event) => {
+          shells = shells.map((shell) => shell.id === event.detail.id ? { ...shell, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } : shell);
+          send({ type: "resize", id: event.detail.id, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height });
+        }}
         on:close={(event) => send({ type: "close", id: event.detail.id })}
       />
     {/each}
@@ -738,7 +794,7 @@
       {/if}
     {/each}
 
-    <svg class="world-drawing-layer" aria-label="Collaborative world drawings">
+    <svg class="pointer-events-none absolute left-0 top-0 z-[9998] h-px w-px overflow-visible" aria-label="Collaborative world drawings">
       {#each shapes as shape (shape.id)}
         <path
           d={pathData(shape)}
@@ -766,9 +822,8 @@
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <svg
-    class="drawing-capture"
+    class={drawingMode ? "pointer-events-auto fixed inset-0 z-[11000] h-full w-full cursor-crosshair" : "pointer-events-none fixed inset-0 z-[11000] h-full w-full"}
     role="application"
-    class:drawing-active={drawingMode}
     on:pointerdown={startCanvasDrawing}
     on:pointermove={continueCanvasDrawing}
     on:pointerup={finishCanvasDrawing}
@@ -778,15 +833,60 @@
   ></svg>
 
   {#if drawingMode}
-    <div class="fixed bottom-4 right-4 z-[12000] flex items-center gap-3 rounded-full border border-indigo-400/30 bg-zinc-950/90 px-4 py-2 text-xs text-zinc-200 shadow-2xl" data-no-pan>
-      <span class="font-medium text-indigo-200">Drawing mode</span>
-      <input type="color" bind:value={drawingColor} aria-label="Drawing color" />
-      <label class="flex items-center gap-2 text-zinc-400">
-        width
-        <input class="w-20 accent-indigo-500" type="range" min="2" max="12" bind:value={drawingStrokeWidth} />
-      </label>
-      <button class="rounded bg-zinc-800 px-2 py-1 hover:bg-zinc-700" on:click={() => (drawingMode = false)}>Pointer</button>
-    </div>
+    <section class="fixed bottom-4 left-1/2 z-[12000] w-[min(calc(100vw-2rem),620px)] -translate-x-1/2 rounded-2xl border border-indigo-300/25 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur" data-no-pan aria-label="Drawing tools">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="grid h-8 w-8 place-items-center rounded-xl bg-indigo-500/20 text-indigo-200">✎</span>
+          <div>
+            <p class="text-sm font-semibold text-white">Draw</p>
+            <p class="text-[11px] text-zinc-400">Esc returns to pointer</p>
+          </div>
+        </div>
+        <button class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-400" on:click={() => (drawingMode = false)}>Done <kbd class="ml-1 text-zinc-500">Esc</kbd></button>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-white/10 pt-3">
+        <fieldset class="flex items-center gap-2" aria-label="Stroke color">
+          <legend class="sr-only">Stroke color</legend>
+          <span class="text-xs font-medium text-zinc-400">Color</span>
+          <div class="flex gap-1.5">
+            {#each drawingColors as color (color.value)}
+              <button
+                type="button"
+                class="grid h-7 w-7 place-items-center rounded-full transition hover:scale-110 focus:outline-none focus:ring-2 focus:ring-white"
+                class:ring-2={drawingColor === color.value}
+                class:ring-indigo-300={drawingColor === color.value}
+                aria-label={color.name}
+                aria-pressed={drawingColor === color.value}
+                title={color.name}
+                on:click={() => (drawingColor = color.value)}
+              ><span class="h-5 w-5 rounded-full border border-black/20" style={`background: ${color.value}`}></span></button>
+            {/each}
+            <label class="relative grid h-7 w-7 cursor-pointer place-items-center overflow-hidden rounded-full border border-zinc-600 bg-zinc-800 text-base" title="Custom color">
+              <span aria-hidden="true">+</span>
+              <input class="absolute inset-0 h-full w-full cursor-pointer opacity-0" type="color" bind:value={drawingColor} aria-label="Custom drawing color" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="flex items-center gap-2" aria-label="Stroke width">
+          <legend class="sr-only">Stroke width</legend>
+          <span class="text-xs font-medium text-zinc-400">Size</span>
+          <div class="flex rounded-lg bg-zinc-900 p-1 ring-1 ring-white/10">
+            {#each drawingWidths as width (width.value)}
+              <button type="button" class="grid h-7 w-9 place-items-center rounded-md transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" class:bg-indigo-500={drawingStrokeWidth === width.value} aria-label={`${width.name} stroke`} aria-pressed={drawingStrokeWidth === width.value} title={width.name} on:click={() => (drawingStrokeWidth = width.value)}>
+                <span class="rounded-full bg-white" style={`width: ${Math.max(5, width.value * 2)}px; height: ${Math.max(5, width.value * 2)}px`}></span>
+              </button>
+            {/each}
+          </div>
+        </fieldset>
+
+        <div class="ml-auto flex items-center gap-2">
+          <button class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!shapes.some((shape) => shape.createdBy === clientID)} on:click={undoLastDrawing} title="Undo your last stroke">Undo</button>
+          <button class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-red-500/15 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-40" disabled={!shapes.some((shape) => shape.createdBy === clientID)} on:click={clearMyDrawings} title="Remove all of your strokes">Clear mine</button>
+        </div>
+      </div>
+    </section>
   {/if}
 
   {#if authRequired && !authenticated}
@@ -813,20 +913,3 @@
 
   <Settings open={settingsOpen} on:close={() => (settingsOpen = false)} />
 </main>
-
-<style lang="postcss">
-  .world-drawing-layer {
-    @apply pointer-events-none absolute left-0 top-0 z-[9998] overflow-visible;
-    width: 1px;
-    height: 1px;
-  }
-
-  .drawing-capture {
-    @apply pointer-events-none fixed inset-0 z-[11000] h-full w-full;
-  }
-
-  .drawing-capture.drawing-active {
-    @apply pointer-events-auto;
-    cursor: crosshair;
-  }
-</style>

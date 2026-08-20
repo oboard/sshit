@@ -3,13 +3,11 @@
 
   import MarkdownEditor from "$lib/ui/MarkdownEditor.svelte";
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
-  import type { CollabWindowState } from "$lib/yjsStore";
+  import type { EditorWindowState } from "$lib/editorWindows";
 
-  export let windowState: CollabWindowState;
+  export let windowState: EditorWindowState;
   export let zIndex = 1;
   export let focused = false;
-  export let activeUsers = 1;
-  export let synced = false;
 
   const dispatch = createEventDispatcher<{
     close: { id: number };
@@ -40,10 +38,7 @@
   on:startMove={(event) => dispatch("startMove", event.detail)}
   on:startResize={(event) => dispatch("startResize", event.detail)}
 >
-  <div
-    class="overflow-hidden px-4 py-2"
-    style="width: {windowState.width}px; height: {windowState.height}px;"
-  >
-    <MarkdownEditor docId={windowState.docId} {activeUsers} {synced} compact />
+  <div class="overflow-hidden" style="width: {windowState.width}px; height: {windowState.height}px;">
+    <MarkdownEditor docId={windowState.docId} />
   </div>
 </WindowFrame>

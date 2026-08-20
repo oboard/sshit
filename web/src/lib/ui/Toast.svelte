@@ -19,7 +19,7 @@
   export let action = "";
 </script>
 
-<div class="toast-box">
+<div class="pointer-events-auto flex items-start rounded-md border border-zinc-700 bg-zinc-900/80 p-4 text-sm backdrop-blur-sm">
   {#if kind === "info"}
     <InfoIcon class="w-5 h-5 text-accent-lime flex-shrink-0" />
   {:else if kind === "success"}
@@ -45,11 +45,3 @@
     </div>
   {/if}
 </div>
-
-<style lang="postcss">
-  .toast-box {
-    @apply border border-zinc-700 bg-zinc-900/80 backdrop-blur-sm;
-    @apply p-4 rounded-md flex items-start pointer-events-auto;
-    @apply text-sm;
-  }
-</style>

@@ -25,6 +25,7 @@
 
   const dispatch = createEventDispatcher<{
     input: { id: number; data: string };
+    resize: { id: number; cols: number; rows: number; width: number; height: number };
     close: { id: number };
     startMove: { id: number; event: MouseEvent };
     startResize: { id: number; event: MouseEvent; width: number; height: number };
@@ -55,9 +56,18 @@
     renderedOutputLength = output.length;
   }
 
-  function fitAndReport() {
+  function fitAndReport(report = false) {
     if (!terminal || !fitAddon || !termEl) return;
     fitAddon.fit();
+    if (report && (terminal.cols !== shell.cols || terminal.rows !== shell.rows)) {
+      dispatch("resize", {
+        id: shell.id,
+        cols: terminal.cols,
+        rows: terminal.rows,
+        width: Math.round(shell.width || termEl.offsetWidth),
+        height: Math.round(shell.height || termEl.offsetHeight),
+      });
+    }
   }
 
   export function fitSize() {
@@ -94,7 +104,8 @@
     });
 
     await tick();
-    fitAndReport();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    fitAndReport(true);
   });
 
   onDestroy(() => {

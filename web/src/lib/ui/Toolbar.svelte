@@ -27,11 +27,11 @@
       sshit
     </a>
 
-    <div class="v-divider"></div>
+    <div class="mx-2 h-5 border-l-4 border-zinc-800"></div>
 
     <div class="flex space-x-1">
       <button
-        class="icon-button"
+        class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700 disabled:bg-transparent disabled:opacity-50"
         on:click={() => dispatch("create")}
         disabled={!connected || !hasWriteAccess}
         title={!connected
@@ -42,21 +42,21 @@
       >
         <PlusCircleIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="icon-button" on:click={() => dispatch("createEditor")} title="Create Markdown editor window">
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("createEditor")} title="Create Markdown editor window">
         <FileTextIcon strokeWidth={1.5} class="p-0.5" />
       </button>
       <button class="icon-button" class:active={drawingMode} on:click={() => dispatch("toggleDrawing")} title={drawingMode ? "Switch to pointer mode" : "Switch to drawing mode"}>
         <PenToolIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="icon-button" on:click={() => dispatch("settings")}>
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("settings")}>
         <SettingsIcon strokeWidth={1.5} class="p-0.5" />
       </button>
     </div>
 
-    <div class="v-divider"></div>
+    <div class="mx-2 h-5 border-l-4 border-zinc-800"></div>
 
     <div class="flex space-x-1">
-      <button class="icon-button" on:click={() => dispatch("networkInfo")}>
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("networkInfo")}>
         <WifiIcon strokeWidth={1.5} class="p-0.5" />
       </button>
     </div>
@@ -64,17 +64,11 @@
 </div>
 
 <style lang="postcss">
-  .v-divider {
-    @apply h-5 mx-2 border-l-4 border-zinc-800;
-  }
-
   .icon-button {
-    @apply relative rounded-md p-1 hover:bg-zinc-700 active:bg-indigo-700 transition-colors;
-    @apply disabled:opacity-50 disabled:bg-transparent;
+    @apply relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700;
   }
 
   .icon-button.active {
     @apply bg-indigo-600/30 text-white ring-1 ring-indigo-400/40;
   }
-
 </style>
