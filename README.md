@@ -10,6 +10,22 @@ TCP :2222
     └── HTTP → embedded Web UI / WebSocket / PTY
 ```
 
+## Install
+
+Install the latest release on Linux x64, macOS arm64, or macOS x64:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | bash
+```
+
+The installer downloads the matching release binary into `/usr/local/bin` (using `sudo` if needed). To choose another directory, set `INSTALL_DIR`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
+```
+
+Windows x64 binaries are available from the [GitHub Releases](https://github.com/oboard/sshit/releases) page.
+
 ## Build frontend first
 
 `internal/web/dist/` is generated and intentionally not committed. Build the frontend before `go run` / `go build`:
