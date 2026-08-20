@@ -25,7 +25,7 @@
       sshit
     </a>
 
-    <div class="v-divider" />
+    <div class="v-divider"></div>
 
     <div class="flex space-x-1">
       <button
@@ -43,7 +43,7 @@
       <button class="icon-button" on:click={() => dispatch("chat")}>
         <MessageSquareIcon strokeWidth={1.5} class="p-0.5" />
         {#if newMessages}
-          <div class="activity" />
+          <div class="activity"></div>
         {/if}
       </button>
       <button class="icon-button" on:click={() => dispatch("settings")}>
@@ -51,7 +51,7 @@
       </button>
     </div>
 
-    <div class="v-divider" />
+    <div class="v-divider"></div>
 
     <div class="flex space-x-1">
       <button class="icon-button" on:click={() => dispatch("networkInfo")}>

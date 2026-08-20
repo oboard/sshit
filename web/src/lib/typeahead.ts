@@ -11,7 +11,7 @@ import type {
   IDisposable,
   ITerminalAddon,
   Terminal,
-} from "sshx-xterm";
+} from "@xterm/xterm";
 
 ///// BEGIN PORTS FROM PACKAGES vs/base/* /////
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
-  import { Terminal } from "xterm";
-  import { FitAddon } from "xterm-addon-fit";
+  import { Terminal } from "@xterm/xterm";
+  import { FitAddon } from "@xterm/addon-fit";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
   import CircleButtons from "$lib/ui/CircleButtons.svelte";
@@ -101,17 +101,23 @@
   });
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="term-container absolute select-none"
   class:focused
   style="transform: translate({shell.x}px, {shell.y}px); z-index: {zIndex}; background: {theme.background};"
   data-no-pan
+  role="group"
+  aria-label={currentTitle}
   on:mousedown|stopPropagation={() => dispatch("focus", { id: shell.id })}
   on:pointerdown|stopPropagation
   on:wheel|stopPropagation
 >
   <div
     class="flex cursor-move select-none items-center"
+    role="toolbar"
+    tabindex="-1"
+    aria-label="Terminal window controls"
     on:mousedown|stopPropagation={(event) => dispatch("startMove", { id: shell.id, event })}
   >
     <div class="flex-1 flex items-center px-3">
@@ -124,16 +130,19 @@
     <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
       {currentTitle}
     </div>
-    <div class="flex-1" />
+    <div class="flex-1"></div>
   </div>
   <div
     class="overflow-hidden px-4 py-2"
     bind:this={termEl}
     style="width: {shell.width || 760}px; height: {shell.height || 420}px;"
-  />
+  ></div>
 
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="resize-handle"
+    role="separator"
+    aria-label="Resize terminal"
     title="Resize terminal"
     on:mousedown|stopPropagation={(event) =>
       dispatch("startResize", {
@@ -143,7 +152,7 @@
         height: shell.height || termEl?.offsetHeight || 420,
       })}
     on:pointerdown|stopPropagation
-  />
+  ></div>
 </div>
 
 <style lang="postcss">

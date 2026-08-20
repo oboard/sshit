@@ -1,14 +1,7 @@
 <script lang="ts">
-  import {
-    Dialog,
-    DialogDescription,
-    DialogOverlay,
-    DialogTitle,
-    Transition,
-    TransitionChild,
-  } from "@rgossiaux/svelte-headlessui";
-  import { XIcon } from "svelte-feather-icons";
   import { createEventDispatcher } from "svelte";
+  import { fade, scale } from "svelte/transition";
+  import { XIcon } from "svelte-feather-icons";
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
@@ -19,19 +12,26 @@
   export let open: boolean;
 </script>
 
-<Transition show={open}>
-  <Dialog on:close class="fixed inset-0 z-50 grid place-items-center">
-    <DialogOverlay class="fixed -z-10 inset-0 bg-black/20 backdrop-blur-sm" />
+{#if open}
+  <div
+    class="fixed inset-0 z-50 grid place-items-center"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="overlay-title"
+    aria-describedby="overlay-description"
+  >
+    <button
+      class="fixed inset-0 -z-10 cursor-default bg-black/20 backdrop-blur-sm"
+      aria-label="Close dialog"
+      type="button"
+      on:click={() => dispatch("close")}
+      transition:fade={{ duration: 150 }}
+    ></button>
 
-    <TransitionChild
-      enter="duration-300 ease-out"
-      enterFrom="scale-95 opacity-0"
-      enterTo="scale-100 opacity-100"
-      leave="duration-75 ease-out"
-      leaveFrom="scale-200 opacity-100"
-      leaveTo="scale-95 opacity-0"
+    <div
       class="w-full sm:w-[calc(100%-32px)]"
       style="max-width: {maxWidth}px"
+      transition:scale={{ duration: 200, start: 0.95 }}
     >
       <div
         class="relative bg-[#111] sm:border border-zinc-800 px-6 py-10 sm:py-6
@@ -42,22 +42,23 @@
             class="absolute top-4 right-4 p-1 rounded hover:bg-zinc-700 active:bg-indigo-700 transition-colors"
             aria-label="Close {title}"
             on:click={() => dispatch("close")}
+            type="button"
           >
             <XIcon class="h-5 w-5" />
           </button>
         {/if}
 
         <div class="mb-8 text-center">
-          <DialogTitle class="text-xl font-medium mb-2">
+          <h2 id="overlay-title" class="text-xl font-medium mb-2">
             {title}
-          </DialogTitle>
-          <DialogDescription class="text-zinc-400">
+          </h2>
+          <p id="overlay-description" class="text-zinc-400">
             {description}
-          </DialogDescription>
+          </p>
         </div>
 
         <slot />
       </div>
-    </TransitionChild>
-  </Dialog>
-</Transition>
+    </div>
+  </div>
+{/if}

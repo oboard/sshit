@@ -19,7 +19,7 @@
       <div
         style:background="hsl({nameToHue(user.name)}, 75%, 60%)"
         class="w-3.5 h-3.5 rounded-full"
-      />
+      ></div>
       <div
         class="text-sm font-medium bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300"
       >

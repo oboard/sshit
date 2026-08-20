@@ -1,8 +1,10 @@
+import { mount } from "svelte";
+
 import App from "./App.svelte";
-import "xterm/css/xterm.css";
+import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
-const app = new App({
+const app = mount(App, {
   target: document.getElementById("app")!,
 });
 

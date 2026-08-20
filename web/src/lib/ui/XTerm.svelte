@@ -36,7 +36,7 @@
   import { browser } from "$app/environment";
 
   import { createEventDispatcher, onDestroy, onMount } from "svelte";
-  import type { Terminal } from "sshx-xterm";
+  import type { Terminal } from "@xterm/xterm";
   import { Buffer } from "buffer";
 
   import themes from "./themes";
@@ -120,10 +120,10 @@
   onMount(async () => {
     const [{ Terminal }, { WebLinksAddon }, { WebglAddon }, { ImageAddon }] =
       await Promise.all([
-        import("sshx-xterm"),
-        import("xterm-addon-web-links"),
-        import("xterm-addon-webgl"),
-        import("xterm-addon-image"),
+        import("@xterm/xterm"),
+        import("@xterm/addon-web-links"),
+        import("@xterm/addon-webgl"),
+        import("@xterm/addon-image"),
       ]);
 
     await waitForFonts();

@@ -1,4 +1,4 @@
-import type { ITheme } from "xterm";
+import type { ITheme } from "@xterm/xterm";
 
 /** VSCode default dark theme, from https://glitchbone.github.io/vscode-base16-term/. */
 const defaultDark: ITheme = {
