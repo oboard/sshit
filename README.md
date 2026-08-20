@@ -158,4 +158,6 @@ GitHub Actions builds release artifacts for Linux x64, macOS arm64/x64, and Wind
 
 ## License
 
-This repository does not currently declare a license. Please confirm the licensing terms with the project maintainers before using, distributing, or building on it.
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+If you modify sshit and make the modified version available to users over a network, AGPL-3.0 requires that those users be offered the corresponding source code for that version. See [section 13 of the license](LICENSE) for details.

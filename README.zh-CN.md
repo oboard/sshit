@@ -158,4 +158,6 @@ GitHub Actions 会构建 Linux x64、macOS arm64/x64 与 Windows x64 发行产�
 
 ## License
 
-本仓库当前未声明许可证。使用、分发或二次开发前，请先与项目维护者确认授权方式。
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）开源。
+
+若你修改 sshit 后通过网络向用户提供该修改版本，AGPL-3.0 要求你向这些用户提供该版本的对应源代码。详情请参阅[许可证第 13 节](LICENSE)。
