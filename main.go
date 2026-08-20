@@ -340,10 +340,6 @@ func (h *webHub) removeClient(id int) {
 }
 
 func (h *webHub) createShell(x, y int, cols, rows uint16) (*webShell, error) {
-	if x == 0 && y == 0 {
-		x = 120
-		y = 120
-	}
 	if cols == 0 {
 		cols = 80
 	}

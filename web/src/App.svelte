@@ -15,6 +15,7 @@
   import { settings } from "$lib/settings";
   import type { WsUser } from "$lib/protocol";
 
+  import { arrangeNewTerminal } from "./arrange";
   import WebTerm, { type Shell } from "./WebTerm.svelte";
 
   type ServerUser = {
@@ -212,16 +213,50 @@
     send({ type: "auth", password });
   }
 
-  function createShell() {
+  function moveCanvasTo(x: number, y: number, nextZoom = 1) {
+    if (!fabricEl) return;
     const rect = fabricEl.getBoundingClientRect();
-    const [x, y] = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const startX = viewportX;
+    const startY = viewportY;
+    const startZoom = zoom;
+    const targetZoom = nextZoom;
+    const targetX = Math.round(rect.width / 2 - (x + 380) * targetZoom);
+    const targetY = Math.round(rect.height / 2 - (y + 220) * targetZoom);
+    const start = performance.now();
+    const duration = 350;
+
+    function smoothstep(t: number) {
+      const x = Math.max(0, Math.min(1, t));
+      return x * x * (3 - 2 * x);
+    }
+
+    function frame(now: number) {
+      const k = smoothstep((now - start) / duration);
+      zoom = startZoom + (targetZoom - startZoom) * k;
+      viewportX = Math.round(startX + (targetX - startX) * k);
+      viewportY = Math.round(startY + (targetY - startY) * k);
+      if (k < 1) requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  function createShell() {
+    const existing = shells.map((shell) => ({
+      x: shell.x,
+      y: shell.y,
+      width: shell.width || 760,
+      height: shell.height || 420,
+    }));
+    const { x, y } = arrangeNewTerminal(existing);
     send({
       type: "create",
-      x: Math.round(x - 380 + Math.random() * 60),
-      y: Math.round(y - 220 + Math.random() * 60),
+      x,
+      y,
       cols: 80,
       rows: 24,
     });
+    moveCanvasTo(x, y, 1);
   }
 
   function focusShell(id: number) {
