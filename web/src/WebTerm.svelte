@@ -3,8 +3,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
 
-  import CircleButton from "$lib/ui/CircleButton.svelte";
-  import CircleButtons from "$lib/ui/CircleButtons.svelte";
+  import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import { settings } from "$lib/settings";
   import themes from "$lib/ui/themes";
 
@@ -101,79 +100,28 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div
-  class="term-container absolute select-none"
-  class:focused
-  style="transform: translate({shell.x}px, {shell.y}px); z-index: {zIndex}; background: {theme.background};"
-  data-no-pan
-  role="group"
-  aria-label={currentTitle}
-  on:mousedown|stopPropagation={() => dispatch("focus", { id: shell.id })}
-  on:pointerdown|stopPropagation
-  on:wheel|stopPropagation
+<WindowFrame
+  id={shell.id}
+  title={currentTitle}
+  x={shell.x}
+  y={shell.y}
+  width={shell.width || termEl?.offsetWidth || 760}
+  height={shell.height || termEl?.offsetHeight || 420}
+  {zIndex}
+  {focused}
+  background={theme.background}
+  ariaLabel={currentTitle}
+  resizeLabel="Resize terminal"
+  on:close={(event) => dispatch("close", event.detail)}
+  on:yellow={() => terminal?.blur()}
+  on:green={fitAndReport}
+  on:focus={(event) => dispatch("focus", event.detail)}
+  on:startMove={(event) => dispatch("startMove", event.detail)}
+  on:startResize={(event) => dispatch("startResize", event.detail)}
 >
-  <div
-    class="flex cursor-move select-none items-center"
-    role="toolbar"
-    tabindex="-1"
-    aria-label="Terminal window controls"
-    on:mousedown|stopPropagation={(event) => dispatch("startMove", { id: shell.id, event })}
-  >
-    <div class="flex-1 flex items-center px-3">
-      <CircleButtons>
-        <CircleButton kind="red" on:mousedown={(event) => event.button === 0 && dispatch("close", { id: shell.id })} />
-        <CircleButton kind="yellow" on:mousedown={(event) => event.button === 0 && terminal?.blur()} />
-        <CircleButton kind="green" on:mousedown={(event) => event.button === 0 && fitAndReport()} />
-      </CircleButtons>
-    </div>
-    <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
-      {currentTitle}
-    </div>
-    <div class="flex-1"></div>
-  </div>
   <div
     class="overflow-hidden px-4 py-2"
     bind:this={termEl}
     style="width: {shell.width || 760}px; height: {shell.height || 420}px;"
   ></div>
-
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="resize-handle"
-    role="separator"
-    aria-label="Resize terminal"
-    title="Resize terminal"
-    on:mousedown|stopPropagation={(event) =>
-      dispatch("startResize", {
-        id: shell.id,
-        event,
-        width: shell.width || termEl?.offsetWidth || 760,
-        height: shell.height || termEl?.offsetHeight || 420,
-      })}
-    on:pointerdown|stopPropagation
-  ></div>
-</div>
-
-<style lang="postcss">
-  .term-container {
-    @apply inline-block rounded-lg border border-zinc-700 opacity-90 shadow-2xl;
-    transition: opacity 200ms;
-  }
-
-  .term-container.focused {
-    @apply opacity-100 ring-1 ring-indigo-500/50;
-  }
-
-  .resize-handle {
-    @apply absolute -bottom-1 -right-1 h-5 w-5 rounded-sm;
-    cursor: se-resize;
-    cursor: nwse-resize;
-  }
-
-  .resize-handle::after {
-    content: "";
-    @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 border-zinc-500;
-    pointer-events: none;
-  }
-</style>
+</WindowFrame>
