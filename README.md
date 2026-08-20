@@ -1,86 +1,161 @@
 # sshit
 
-A tiny SSH server that gives PTY-backed sessions an interactive shell using the server process' `SHELL` environment variable, falling back to `/bin/sh`.
+[简体中文](README.zh-CN.md)
 
-The same TCP port serves both SSH and a browser terminal UI:
+**Bring an SSH terminal to the browser—without giving up the native command-line experience.**
+
+`sshit` is a lightweight SSH service that serves both standard SSH and a Web UI on one port. Connect with `ssh` for a familiar PTY-backed shell, or open the same address in a browser for a shared terminal workspace. Both entry points are served by a single Go binary with the Web frontend embedded—no separate web server deployment is needed.
+
+![sshit Web UI screenshot](screenshots/1.jpg)
 
 ```text
-TCP :2222
-    ├── SSH  → PTY / Shell
-    └── HTTP → embedded Web UI / WebSocket / PTY
+                    ┌─────────────┐
+ssh -p 2222 host ──►│  SSH / PTY  │──► $SHELL
+                    │             │
+Browser ── HTTP/WS ►│    sshit    │──► shared Web PTYs
+                    └─────────────┘
+                         :2222
 ```
 
-## Install
+## Why SSH + Web UI?
 
-Install the latest release on Linux x64, macOS arm64, or macOS x64:
+SSH is reliable, universal, and script-friendly, while a Web UI makes ad-hoc access and collaboration easier. `sshit` combines both in one service:
+
+- **Keep the SSH workflow** — connect with any SSH client for a real PTY and native shell experience.
+- **No browser-side client installation** — open a URL for a full terminal; input, output, and terminal dimensions synchronize over WebSocket.
+- **A shared workspace for collaboration** — Web users see the same terminal windows and can create, move, resize, or close them. Terminal output is retained and synchronized for users who join later.
+- **More than a terminal** — the Web UI includes multi-user cursors, a shared Markdown editor, and a canvas for commands, notes, and discussion in one place.
+- **One port, one binary** — connections are distinguished by their `SSH-` or HTTP prefixes; Go `embed` packages static frontend assets so no reverse proxy or standalone Node.js runtime is required.
+
+> Shells created in the Web workspace are shared among connected browser users. Every SSH login, in contrast, receives its own PTY shell.
+
+## Quick Start
+
+### Install
+
+The installer fetches the latest release for Linux x64, macOS arm64, or macOS x64:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | bash
 ```
 
-The installer downloads the matching release binary into `/usr/local/bin` (using `sudo` if needed). To choose another directory, set `INSTALL_DIR`:
+It installs to `/usr/local/bin` by default. To use a directory in your home folder instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
+curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh \
+  | INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
-Windows x64 binaries are available from the [GitHub Releases](https://github.com/oboard/sshit/releases) page.
+Download binaries for other supported platforms from [GitHub Releases](https://github.com/oboard/sshit/releases).
 
-## Build frontend first
-
-`internal/web/dist/` is generated and intentionally not committed. Build the frontend before `go run` / `go build`:
+### Start the Server
 
 ```bash
-cd web
-npm install
-npm run build
-cd ..
+sshit
 ```
 
-## Run
+By default, sshit listens on `0.0.0.0:2222`. On its first launch, it automatically creates an SSH host key at `~/.ssh/sshit_host_ed25519_key` and reuses it on subsequent launches.
 
-```bash
-go run .
-```
+### Connect in Two Ways
 
-The default port is `2222`. Use `-p` or `--port` to choose another port:
-
-```bash
-go run . --port 2022
-# or
-go run . -p 2022
-```
-
-By default, SSH and Web UI access do not require a password. Use `--password` to require the same password for both SSH and Web UI:
-
-```bash
-go run . --password test123
-```
-
-The server uses a persistent host key at `~/.ssh/sshit_host_ed25519_key`. If the key already exists it is reused; otherwise it is generated automatically with `0600` permissions.
-
-## SSH client
+**SSH:**
 
 ```bash
 ssh -p 2222 localhost
 ```
 
-## Web UI
+**Browser:**
 
-Open the same port in a browser:
+Open <http://localhost:2222>. The page automatically establishes a WebSocket connection and provides an interactive terminal.
 
-```text
-http://localhost:2222
-```
+## Usage
 
-The web UI is extracted from sshx visual assets/theme and embedded into the Go binary. It connects back to `/ws` on the same host and starts a PTY shell over WebSocket.
+### Keep Your SSH Workflow
 
-## Build
+SSH sessions start the service process's `$SHELL`, falling back to `/bin/sh` when it is unset. The terminal environment uses `xterm-256color`, enables true color, and synchronizes the SSH client's terminal dimensions.
 
 ```bash
-cd web
-npm install
-npm run build
-cd ..
-go build ./...
+# Choose a port
+sshit --port 2022
+
+# Short form
+sshit -p 2022
+
+# Connect to that port
+ssh -p 2022 user@server.example
 ```
+
+### Collaborate in the Web Workspace
+
+In the browser, you can:
+
+1. Create terminal windows on the canvas.
+2. Drag, resize, focus, or close terminals.
+3. See the same terminal output as other connected users in real time.
+4. Use shared Markdown windows and the canvas to document commands, steps, or troubleshooting notes.
+5. Use the participant list and multi-user cursors to see who is in the workspace.
+
+This makes `sshit` useful for remote demonstrations, pair troubleshooting, teaching, and temporary operations work where both terminal and browser users need access.
+
+## Access Control
+
+SSH and the Web UI do not require a password by default. This is appropriate only for local development or trusted networks. Before exposing the service, set a password and/or put it behind trusted network and access controls:
+
+```bash
+sshit --password 'change-me'
+```
+
+The same password is used for SSH password authentication and Web UI login:
+
+```bash
+ssh -p 2222 user@server.example
+# Password: change-me
+```
+
+> `--password` is a simple shared-password mechanism. For production, also use controls such as firewalls, a VPN, reverse proxy/TLS, or other external authentication. Do not expose an unprotected instance to the public Internet.
+
+## How It Works
+
+After a connection reaches the TCP port, `sshit` inspects its leading bytes:
+
+| Connection | Detection | Handling |
+| --- | --- | --- |
+| SSH | Starts with `SSH-` | Handed to the SSH server, which starts an independent PTY and shell |
+| HTTP | Any other request | Serves the embedded Web UI |
+| WebSocket | `/ws` | Carries Web terminal events, PTY input/output, and workspace state |
+| WebSocket | `/collab` | Synchronizes Markdown, canvas, and collaboration state |
+
+As a result, command-line and browser access coexist naturally: no extra ports and no separate services to choose between.
+
+## Build from Source
+
+Requirements: Go 1.22+, Node.js, and pnpm.
+
+Frontend output is written to `internal/web/dist/`, then embedded in the Go binary. The generated directory is not committed, so build the frontend before running or building the Go program:
+
+```bash
+# 1. Build the frontend assets to embed
+cd web
+pnpm install --frozen-lockfile
+pnpm run build
+cd ..
+
+# 2. Build or run
+go build ./...
+# or
+go run . --port 2222
+```
+
+## Release Builds
+
+GitHub Actions builds release artifacts for Linux x64, macOS arm64/x64, and Windows x64. Pushing a `v*` tag creates a GitHub Release and uploads the corresponding binaries.
+
+## Stack
+
+- **Server:** Go, `gliderlabs/ssh`, `creack/pty`, Gorilla WebSocket
+- **Web UI:** Svelte, xterm.js, Yjs, CodeMirror
+- **Distribution:** Go `embed` packages the compiled static assets in one executable
+
+## License
+
+This repository does not currently declare a license. Please confirm the licensing terms with the project maintainers before using, distributing, or building on it.
