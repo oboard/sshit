@@ -78,6 +78,43 @@
     await new FontFaceObserver("Fira Code VF").load();
   }
 
+  /**
+   * The workspace zooms terminal windows with CSS transforms. xterm's mouse
+   * service receives transformed client coordinates but divides them by its
+   * unscaled cell size, so normalize pointer positions before it resolves a
+   * selection or forwards a terminal mouse report.
+   */
+  function installScaledMouseCoordinateFix() {
+    const mouseService = (terminal as any)._core?._mouseService;
+    if (!mouseService) return;
+
+    const toTerminalCoordinates = (event: MouseEvent | WheelEvent, element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      const scaleX = rect.width / width;
+      const scaleY = rect.height / height;
+      if (!width || !height || !Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0) {
+        return event;
+      }
+
+      // Keep every event property through its prototype while overriding only
+      // the coordinates used by xterm's MouseService.
+      return Object.create(event, {
+        clientX: { value: rect.left + (event.clientX - rect.left) / scaleX },
+        clientY: { value: rect.top + (event.clientY - rect.top) / scaleY },
+      });
+    };
+
+    const getCoords = mouseService.getCoords.bind(mouseService);
+    mouseService.getCoords = (event: MouseEvent, element: HTMLElement, ...args: any[]) =>
+      getCoords(toTerminalCoordinates(event, element), element, ...args);
+
+    const getMouseReportCoords = mouseService.getMouseReportCoords.bind(mouseService);
+    mouseService.getMouseReportCoords = (event: MouseEvent, element: HTMLElement) =>
+      getMouseReportCoords(toTerminalCoordinates(event, element), element);
+  }
+
   async function initializeTerminal() {
     terminalError = "";
     try {
@@ -151,6 +188,7 @@
         return true;
       });
       terminal.open(termEl);
+      installScaledMouseCoordinateFix();
       terminalReady = true;
       terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
       terminal.onData((data) => dispatch("input", { id: shell.id, data }));

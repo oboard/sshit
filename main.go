@@ -688,6 +688,19 @@ func (h *webHub) restore() bool {
 	if snap.IDSeq > h.idSeq {
 		h.idSeq = snap.IDSeq
 	}
+	if restored {
+		h.mu.Lock()
+		shells, editors := 0, 0
+		for _, w := range h.windows {
+			if w.Kind == persist.KindShell {
+				shells++
+			} else {
+				editors++
+			}
+		}
+		h.mu.Unlock()
+		log.Printf("restored %d window(s) from %s (%d shell, %d editor)", shells+editors, h.persistDir, shells, editors)
+	}
 	return restored
 }
 
@@ -733,12 +746,13 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 	}
 
 	// Replay saved scrollback so the pane shows its previous screen contents.
-	if h.saveHistory {
-		if history, err := persist.ReadHistory(h.persistDir, saved.ID); err == nil && len(history) > 0 {
-			win.buffer = append(win.buffer, history...)
-			win.buffer = append(win.buffer, restoredMarker...)
-			win.historyOffset = len(win.buffer)
-		}
+	// Replay whenever a history file exists, even if this run has
+	// -persist-history off: the flag gates *writing* history, not reading back
+	// what a previous run already saved.
+	if history, err := persist.ReadHistory(h.persistDir, saved.ID); err == nil && len(history) > 0 {
+		win.buffer = append(win.buffer, history...)
+		win.buffer = append(win.buffer, restoredMarker...)
+		win.historyOffset = len(win.buffer)
 	}
 
 	h.mu.Lock()
@@ -1169,7 +1183,7 @@ func main() {
 	flag.IntVar(port, "p", 2222, "port to listen on")
 	password := flag.String("password", "", "password required for SSH and Web UI access")
 	persist := flag.Bool("persist", true, "persist the workspace to ~/.sshit/<port>/ and restore it after a restart")
-	persistHistory := flag.Bool("persist-history", false, "also save terminal scrollback to disk and replay it after a restart (may contain secrets)")
+	persistHistory := flag.Bool("persist-history", true, "also save terminal scrollback to ~/.sshit/<port>/history/ and replay it after a restart (may contain secrets; disable with -persist-history=false)")
 	flag.Parse()
 
 	hostKey, hostKeyPath, err := loadOrCreateHostKey()
@@ -1197,6 +1211,9 @@ func main() {
 	persistDir := filepath.Join(home, ".sshit", strconv.Itoa(*port))
 
 	hub := newWebHub(*password, persistDir, *persist, *persistHistory)
+	if *persist {
+		log.Printf("session persistence enabled: %s (history replay %v)", persistDir, *persistHistory)
+	}
 	if !hub.restore() {
 		if _, err := hub.createShell(0, 0, 80, 24, 760, 420, 0, "", nil); err != nil {
 			log.Printf("failed to create initial web shell: %v", err)

@@ -90,11 +90,11 @@ ssh -p 2022 user@server.example
 By default, sshit persists the web workspace to `~/.sshit/<port>/` and restores it after the server (or the machine) restarts. Restored windows come back with their position, size, and stacking order intact.
 
 ```bash
-# Default: layout + AI agent resume are on
+# Default: layout + terminal history + AI agent resume are all on
 sshit
 
-# Also replay terminal scrollback after a restart (see the security note below)
-sshit --persist-history
+# Disable scrollback persistence (layout and agent resume still apply)
+sshit --persist-history=false
 
 # Disable persistence entirely
 sshit --persist=false
@@ -103,12 +103,12 @@ sshit --persist=false
 What is restored:
 
 - **Window layout** — every terminal and editor window's position, size, and z-order.
+- **Terminal history** — each pane replays its previous screen contents. Plain shells reopen as fresh shells in their saved working directory; the underlying processes are not preserved.
 - **AI agent sessions** — terminals running a supported agent (`claude`, `codex`) are relaunched with their resume command (for example `claude --resume <id>`), so the conversation continues where it left off.
-- **Terminal history** — with `--persist-history`, each pane replays its previous screen contents. Plain shells otherwise reopen as fresh shells in their saved working directory; the underlying processes are not preserved.
 
-State is written to `~/.sshit/<port>/session.json` (layout) and `~/.sshit/<port>/history/<id>.txt` (scrollback, only with `--persist-history`).
+State is written to `~/.sshit/<port>/session.json` (layout) and `~/.sshit/<port>/history/<id>.txt` (scrollback). If history files exist from a previous run they are always replayed on restore — `--persist-history` only controls whether new output keeps being written.
 
-> **Security note:** terminal scrollback can contain passwords, tokens, and command output. Treat `~/.sshit/` like your shell history — it is written with `0700`/`0600` permissions, and `--persist-history` is off by default.
+> **Security note:** terminal scrollback can contain passwords, tokens, and command output. Treat `~/.sshit/` like your shell history — it is written with `0700`/`0600` permissions. Use `--persist-history=false` on shared machines.
 
 ### Collaborate in the Web Workspace
 
