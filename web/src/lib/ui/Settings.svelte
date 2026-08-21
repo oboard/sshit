@@ -29,10 +29,14 @@
   on:close
 >
   <div class="flex flex-col gap-4">
-    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+    <div
+      class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row"
+    >
       <div class="flex-1">
         <p class="mb-1 font-medium text-zinc-200">Name</p>
-        <p class="text-sm text-zinc-400">Choose how you appear to other users.</p>
+        <p class="text-sm text-zinc-400">
+          Choose how you appear to other users.
+        </p>
       </div>
       <div>
         <input
@@ -48,7 +52,9 @@
         />
       </div>
     </div>
-    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+    <div
+      class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row"
+    >
       <div class="flex-1">
         <p class="mb-1 font-medium text-zinc-200">Color palette</p>
         <p class="text-sm text-zinc-400">Color theme for text in terminals.</p>
@@ -68,7 +74,9 @@
         </select>
       </div>
     </div>
-    <div class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row">
+    <div
+      class="flex flex-col items-start gap-4 rounded-lg bg-zinc-800/25 p-4 sm:flex-row"
+    >
       <div class="flex-1">
         <p class="mb-1 font-medium text-zinc-200">Scrollback</p>
         <p class="text-sm text-zinc-400">
@@ -98,5 +106,7 @@
     </div> -->
   </div>
 
-  <p class="mt-6 text-sm text-right text-zinc-400">sshit</p>
+  <p class="mt-6 text-sm text-right text-zinc-400">
+    Made with ❤️ by <a href="https://github.com/oboard">oboard</a>
+  </p>
 </OverlayMenu>
