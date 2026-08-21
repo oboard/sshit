@@ -16,8 +16,8 @@
   const dispatch = createEventDispatcher<{
     close: { id: number };
     focus: { id: number };
-    startMove: { id: number; event: MouseEvent };
-    startResize: { id: number; event: MouseEvent; width: number; height: number };
+    startMove: { id: number; event: PointerEvent };
+    startResize: { id: number; event: PointerEvent; width: number; height: number };
   }>();
 
   const title = "Markdown Editor";

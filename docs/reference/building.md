@@ -25,18 +25,18 @@ go build ./...
 
 ## 构建文档站点
 
-文档是独立的 VitePress 包，输出为 `docs/.vitepress/dist/`，不会影响嵌入式应用前端：
+VitePress 的依赖和命令位于仓库根目录的 `package.json`，文档源文件和输出仍位于 `docs/`。输出为 `docs/.vitepress/dist/`，不会影响嵌入式应用前端：
 
 ```bash
-pnpm --dir docs install
-pnpm --dir docs run docs:build
+pnpm install --frozen-lockfile
+pnpm run docs:build
 ```
 
 本地预览与开发：
 
 ```bash
-pnpm --dir docs run docs:dev
-pnpm --dir docs run docs:preview
+pnpm run docs:dev
+pnpm run docs:preview
 ```
 
 `docs:dev` 默认启动 VitePress 开发服务器；可附加 Vite 参数来修改端口或监听地址。

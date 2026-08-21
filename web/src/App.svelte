@@ -105,6 +105,22 @@
   let panStart = [0, 0];
   let panOrigin = [0, 0];
 
+  // Touch state: pointers that went down on the empty canvas (pan surface).
+  // One finger pans; a second finger promotes the gesture to a pinch zoom.
+  let surfacePointers = new Map<number, [number, number]>();
+  let pinch: {
+    zoom0: number;
+    viewport0: [number, number];
+    mid0: [number, number];
+    dist0: number;
+  } | null = null;
+  let tapCandidate: { id: number; x: number; y: number; time: number; moved: boolean } | null = null;
+  let lastTap = { time: 0, x: 0, y: 0 };
+
+  const MIN_ZOOM = 0.25;
+  const MAX_ZOOM = 2.5;
+  const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
   let movingWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
@@ -200,7 +216,8 @@
 
       if (previousCount === 0 && windows.length >= 1) {
         const target = windows.find((w) => w.kind === "shell") ?? windows[0];
-        requestAnimationFrame(() => moveCanvasTo(target.x, target.y, 1));
+        const fitZoom = fitZoomFor(target.width || 760);
+        requestAnimationFrame(() => moveCanvasTo(target.x, target.y, fitZoom, target.width || 760, target.height || 420));
       }
     }
   }
@@ -315,22 +332,43 @@
     send({ type: "auth", password });
   }
 
-  function moveCanvasTo(x: number, y: number, nextZoom = 1) {
+  /**
+   * Zoom level that fits a window of the given world width on small screens.
+   * On desktop viewports this always returns 1.
+   */
+  function fitZoomFor(width: number) {
+    if (!fabricEl) return 1;
+    const rect = fabricEl.getBoundingClientRect();
+    return Math.min(1, (rect.width - 24) / (width + 40));
+  }
+
+  function moveCanvasTo(x: number, y: number, nextZoom = 1, w = 760, h = 420) {
     if (!fabricEl) return;
     const rect = fabricEl.getBoundingClientRect();
     const startX = viewportX;
     const startY = viewportY;
     const startZoom = zoom;
     const targetZoom = nextZoom;
-    const targetX = Math.round(rect.width / 2 - (x + 380) * targetZoom);
-    const targetY = Math.round(rect.height / 2 - (y + 220) * targetZoom);
-    const start = performance.now();
-    const duration = 350;
+    const targetX = Math.round(rect.width / 2 - (x + w / 2) * targetZoom);
+    const targetY = Math.round(rect.height / 2 - (y + h / 2) * targetZoom);
+    animateViewTo(targetX, targetY, targetZoom, startX, startY, startZoom, 350);
+  }
 
-    function smoothstep(t: number) {
-      const x = Math.max(0, Math.min(1, t));
-      return x * x * (3 - 2 * x);
-    }
+  function smoothstep(t: number) {
+    const x = Math.max(0, Math.min(1, t));
+    return x * x * (3 - 2 * x);
+  }
+
+  function animateViewTo(
+    targetX: number,
+    targetY: number,
+    targetZoom: number,
+    startX = viewportX,
+    startY = viewportY,
+    startZoom = zoom,
+    duration = 250,
+  ) {
+    const start = performance.now();
 
     function frame(now: number) {
       const k = smoothstep((now - start) / duration);
@@ -341,6 +379,28 @@
     }
 
     requestAnimationFrame(frame);
+  }
+
+  /** Animate a zoom change while keeping a screen point stationary. */
+  function zoomAtPoint(clientX: number, clientY: number, targetZoom: number) {
+    if (!fabricEl) return;
+    const rect = fabricEl.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const worldX = (px - viewportX) / zoom;
+    const worldY = (py - viewportY) / zoom;
+    animateViewTo(px - worldX * targetZoom, py - worldY * targetZoom, targetZoom);
+  }
+
+  function resetZoom() {
+    if (!fabricEl) return;
+    const rect = fabricEl.getBoundingClientRect();
+    zoomAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, 1);
+  }
+
+  function handleDoubleTap(clientX: number, clientY: number) {
+    // Toggle between overview (100%) and a close-up (200%) at the tapped point.
+    zoomAtPoint(clientX, clientY, Math.abs(zoom - 1) < 0.01 ? 2 : 1);
   }
 
   function existingWindows() {
@@ -355,13 +415,13 @@
   function createShell() {
     const { x, y } = arrangeNewTerminal(existingWindows());
     send({ type: "create", kind: "shell", x, y, cols: 80, rows: 24, width: 760, height: 420 });
-    moveCanvasTo(x, y, 1);
+    moveCanvasTo(x, y, fitZoomFor(760), 760, 420);
   }
 
   function createEditorWindow() {
     const { x, y } = arrangeNewTerminal(existingWindows());
     send({ type: "create", kind: "editor", x, y, width: 980, height: 620 });
-    moveCanvasTo(x, y, 1);
+    moveCanvasTo(x, y, fitZoomFor(980), 980, 620);
   }
 
   function focusWindow(id: number) {
@@ -374,7 +434,7 @@
     send({ type: "close", id });
   }
 
-  function startMove(id: number, event: MouseEvent) {
+  function startMove(id: number, event: PointerEvent) {
     event.preventDefault();
     focusWindow(id);
     const win = windowById(id);
@@ -384,7 +444,7 @@
     movingOrigin = [win.x, win.y];
   }
 
-  function startResize(id: number, event: MouseEvent, width: number, height: number) {
+  function startResize(id: number, event: PointerEvent, width: number, height: number) {
     event.preventDefault();
     focusWindow(id);
     resizingWindowID = id;
@@ -392,16 +452,39 @@
     resizingOrigin = [width, height];
   }
 
-  function startPan(event: MouseEvent) {
-    if (event.button !== 0) return;
+  function pointerDist(a: [number, number], b: [number, number]) {
+    return Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1]));
+  }
+
+  function pointerMid(a: [number, number], b: [number, number]): [number, number] {
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  }
+
+  function handlePointerDown(event: PointerEvent) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     if (drawingMode) return;
     const target = event.target as HTMLElement;
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
     focusedWindowID = -1;
-    panning = true;
-    panStart = [event.clientX, event.clientY];
-    panOrigin = [viewportX, viewportY];
+    surfacePointers.set(event.pointerId, [event.clientX, event.clientY]);
+    if (surfacePointers.size === 1) {
+      panning = true;
+      panStart = [event.clientX, event.clientY];
+      panOrigin = [viewportX, viewportY];
+      tapCandidate = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), moved: false };
+    } else if (surfacePointers.size === 2) {
+      // A second finger on the canvas promotes the pan to a pinch zoom.
+      panning = false;
+      tapCandidate = null;
+      const [a, b] = [...surfacePointers.values()];
+      pinch = {
+        zoom0: zoom,
+        viewport0: [viewportX, viewportY],
+        mid0: pointerMid(a, b),
+        dist0: pointerDist(a, b),
+      };
+    }
   }
 
   function startCanvasDrawing(event: PointerEvent) {
@@ -479,7 +562,7 @@
     const mouseY = event.clientY - rect.top;
     const beforeX = (mouseX - viewportX) / zoom;
     const beforeY = (mouseY - viewportY) / zoom;
-    const nextZoom = Math.min(2.5, Math.max(0.25, zoom * Math.exp(-event.deltaY * 0.001)));
+    const nextZoom = clampZoom(zoom * Math.exp(-event.deltaY * 0.001));
     zoom = nextZoom;
     viewportX = mouseX - beforeX * zoom;
     viewportY = mouseY - beforeY * zoom;
@@ -502,8 +585,10 @@
     return "default";
   }
 
-  function handleMouseMove(event: MouseEvent) {
-    if (fabricEl) {
+  function handlePointerMove(event: PointerEvent) {
+    // Only devices with a persistent cursor broadcast it — a finger has no
+    // hover position, so touch moves would just teleport the remote cursor.
+    if (event.pointerType !== "touch" && fabricEl) {
       const [x, y] = screenToWorld(event.clientX, event.clientY);
       const cursorStyle = detectCursorStyle(event.clientX, event.clientY);
       send({ type: "cursor", x, y, cursorStyle });
@@ -511,15 +596,44 @@
 
     if (drawingMode) return;
 
-    if (panning) {
-      viewportX = Math.round(panOrigin[0] + event.clientX - panStart[0]);
-      viewportY = Math.round(panOrigin[1] + event.clientY - panStart[1]);
-      return;
+    if (surfacePointers.has(event.pointerId)) {
+      surfacePointers.set(event.pointerId, [event.clientX, event.clientY]);
+
+      if (tapCandidate && event.pointerId === tapCandidate.id && !tapCandidate.moved) {
+        if (Math.hypot(event.clientX - tapCandidate.x, event.clientY - tapCandidate.y) > 10) {
+          tapCandidate.moved = true;
+        }
+      }
+
+      if (pinch && surfacePointers.size >= 2) {
+        const rect = fabricEl.getBoundingClientRect();
+        const [a, b] = [...surfacePointers.values()];
+        const mid = pointerMid(a, b);
+        const nextZoom = clampZoom(pinch.zoom0 * (pointerDist(a, b) / pinch.dist0));
+        // Keep the world point under the initial pinch midpoint stationary
+        // while the midpoint itself follows the fingers.
+        const worldX = (pinch.mid0[0] - rect.left - pinch.viewport0[0]) / pinch.zoom0;
+        const worldY = (pinch.mid0[1] - rect.top - pinch.viewport0[1]) / pinch.zoom0;
+        zoom = nextZoom;
+        viewportX = Math.round(mid[0] - rect.left - worldX * nextZoom);
+        viewportY = Math.round(mid[1] - rect.top - worldY * nextZoom);
+        return;
+      }
+
+      if (panning) {
+        viewportX = Math.round(panOrigin[0] + event.clientX - panStart[0]);
+        viewportY = Math.round(panOrigin[1] + event.clientY - panStart[1]);
+        return;
+      }
     }
 
     if (resizingWindowID !== -1) {
-      const minWidth = isShell(resizingWindowID) ? 320 : 520;
-      const minHeight = isShell(resizingWindowID) ? 180 : 360;
+      // Keep windows reachable on phones: never require a minimum larger than
+      // the viewport itself.
+      const vw = fabricEl?.clientWidth ?? 1024;
+      const vh = fabricEl?.clientHeight ?? 768;
+      const minWidth = Math.min(isShell(resizingWindowID) ? 320 : 520, Math.max(240, vw - 48));
+      const minHeight = Math.min(isShell(resizingWindowID) ? 180 : 360, Math.max(200, vh - 48));
       const width = Math.max(minWidth, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
       const height = Math.max(minHeight, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
       windows = windows.map((w) => {
@@ -545,8 +659,59 @@
     }
   }
 
+  function handlePointerUp(event: PointerEvent) {
+    const wasSurfacePointer = surfacePointers.delete(event.pointerId);
+
+    if (pinch && surfacePointers.size < 2) {
+      pinch = null;
+      if (surfacePointers.size === 1) {
+        // A pinch just ended: keep panning seamlessly with the remaining finger.
+        const [remaining] = [...surfacePointers.values()];
+        panStart = remaining;
+        panOrigin = [viewportX, viewportY];
+        panning = true;
+      }
+    }
+    if (panning && surfacePointers.size === 0) {
+      panning = false;
+    }
+
+    // Double-tap on empty canvas toggles between 100% and 200% zoom.
+    if (wasSurfacePointer && tapCandidate && event.pointerId === tapCandidate.id) {
+      const quick = Date.now() - tapCandidate.time < 350;
+      if (quick && !tapCandidate.moved) {
+        const now = Date.now();
+        const isDouble =
+          now - lastTap.time < 350 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 40;
+        if (isDouble) {
+          lastTap = { time: 0, x: 0, y: 0 };
+          handleDoubleTap(event.clientX, event.clientY);
+        } else {
+          lastTap = { time: now, x: event.clientX, y: event.clientY };
+        }
+      }
+      tapCandidate = null;
+    }
+
+    stopMove();
+  }
+
+  function handlePointerLeave(event: PointerEvent) {
+    // A mouse leaving the window mid-gesture releases everything; touch
+    // pointers are implicitly captured and always end with up/cancel instead.
+    if (event.pointerType === "mouse") {
+      panning = false;
+      pinch = null;
+      surfacePointers.clear();
+      tapCandidate = null;
+    }
+    stopMove();
+  }
+
   function stopMove() {
-    panning = false;
+    // Note: `panning` is owned by the pointer handlers (a pinch can end with
+    // one finger still down, seamlessly continuing the pan), so it is not
+    // reset here.
     if (resizingWindowID !== -1) {
       const win = windowById(resizingWindowID);
       if (win) {
@@ -567,9 +732,15 @@
     }
   }
 
+  // iOS Safari fires proprietary gesture events for page pinch-zoom; the
+  // workspace handles pinch itself, so suppress the browser's version.
+  const preventPageGesture = (event: Event) => event.preventDefault();
+
   onMount(() => {
     refreshShapes();
     drawingShapes.observe(refreshShapes);
+    document.addEventListener("gesturestart", preventPageGesture);
+    document.addEventListener("gesturechange", preventPageGesture);
     collabConn = new CollabConnection((status) => {
       collabStatus = status;
       if (status === "auth-failed") {
@@ -593,6 +764,8 @@
     manualClose = true;
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
+    document.removeEventListener("gesturestart", preventPageGesture);
+    document.removeEventListener("gesturechange", preventPageGesture);
     drawingShapes.unobserve(refreshShapes);
     collabConn?.destroy();
     socket?.close();
@@ -612,10 +785,11 @@
   aria-label="sshit workspace"
   bind:this={fabricEl}
   class:cursor-grabbing={panning}
-  on:mousedown={startPan}
-  on:mousemove={handleMouseMove}
-  on:mouseup={stopMove}
-  on:mouseleave={stopMove}
+  on:pointerdown={handlePointerDown}
+  on:pointermove={handlePointerMove}
+  on:pointerup={handlePointerUp}
+  on:pointercancel={handlePointerUp}
+  on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
   <div class="absolute top-4 left-4 z-[12000]">
@@ -632,7 +806,10 @@
   </div>
 
   <div class="absolute top-5 right-5 z-[10000] flex items-center gap-3">
-    <NameList users={usersForUI} />
+    <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
+    <div class="hidden sm:block">
+      <NameList users={usersForUI} />
+    </div>
     <Avatars users={usersForUI} />
   </div>
 
@@ -647,8 +824,16 @@
   {/if}
 
   <div data-pan-surface class="absolute inset-0 bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]" class:cursor-crosshair={drawingMode}>
-    <div class="absolute cursor-grab inset-0 opacity-20" style="background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
-    <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
+    <!-- touch-action: none lets our pointer handlers own one-finger pans and
+         two-finger pinches without the browser hijacking the gesture. Windows
+         float above this layer, so terminal/editor touch scrolling is unaffected. -->
+    <div class="absolute cursor-grab inset-0 opacity-20" style="touch-action: none; background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
+    <button
+      class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-2 sm:py-1 text-xs text-zinc-300"
+      data-no-pan
+      title="Reset zoom to 100%"
+      on:click={resetZoom}
+    >zoom {Math.round(zoom * 100)}%</button>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
     {#each windows as windowState (windowState.id)}
@@ -720,6 +905,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <svg
     class={drawingMode ? "pointer-events-auto fixed inset-0 z-[11000] h-full w-full cursor-crosshair" : "pointer-events-none fixed inset-0 z-[11000] h-full w-full"}
+    style="touch-action: none;"
     role="application"
     on:pointerdown={startCanvasDrawing}
     on:pointermove={continueCanvasDrawing}
