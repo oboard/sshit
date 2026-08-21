@@ -45,6 +45,12 @@ It installs to `/usr/local/bin` by default. To use a directory in your home fold
 curl -fsSL https://sshit.oboard.fun/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
+For Windows x64, run this in PowerShell (it installs to `%LOCALAPPDATA%\\sshit\\bin` and adds that directory to your user `PATH`):
+
+```powershell
+irm https://sshit.oboard.fun/install.ps1 | iex
+```
+
 Download binaries for other supported platforms from [GitHub Releases](https://github.com/oboard/sshit/releases).
 
 ### Start the Server

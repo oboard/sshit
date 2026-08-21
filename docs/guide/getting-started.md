@@ -18,6 +18,14 @@ curl -fsSL https://sshit.oboard.fun/install.sh | INSTALL_DIR="$HOME/.local/bin" 
 
 安装脚本由本站托管，同时会自动识别操作系统和 CPU 架构，并下载最新 GitHub Release 中对应的二进制文件。
 
+Windows x64 用户可在 PowerShell 中运行以下命令：
+
+```powershell
+irm https://sshit.oboard.fun/install.ps1 | iex
+```
+
+脚本会安装到 `%LOCALAPPDATA%\\sshit\\bin`，并将该目录添加到当前用户的 `PATH`；请打开新的 PowerShell 窗口后再运行 `sshit`。
+
 其他平台请从 [GitHub Releases](https://github.com/oboard/sshit/releases) 下载构建产物。
 
 ## 启动服务
