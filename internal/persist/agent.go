@@ -26,31 +26,57 @@ func homeDir() string {
 	return os.Getenv("HOME")
 }
 
-// DetectAgentForPID inspects the direct child processes of a shell PID and
-// returns an AgentRef when a supported AI agent (claude/codex) is running.
-// Returns nil when no supported agent is found or detection fails.
-func DetectAgentForPID(shellPID int, cwd string) *AgentRef {
-	kind := findAgentProcess(shellPID)
+// DetectAgentForPID walks the descendant process tree of a shell PID looking
+// for a supported AI agent (claude/codex). When found it returns the AgentRef
+// and the agent process's own working directory — the agent's cwd, not the
+// shell's launch directory, is what determines which project/session it belongs
+// to. Returns (nil, "") when no supported agent is running.
+func DetectAgentForPID(shellPID int) (*AgentRef, string) {
+	pid, kind := findAgentProcess(shellPID)
 	if kind == "" {
-		return nil
+		return nil, ""
 	}
+	cwd := ProcessCwd(pid)
 	ref := &AgentRef{Kind: kind}
 	switch kind {
 	case AgentClaude:
 		ref.SessionID = FindClaudeSessionID(cwd)
 	case AgentCodex:
-		ref.SessionID = FindCodexSessionID()
+		ref.SessionID = FindCodexSessionID(cwd)
 	}
-	return ref
+	return ref, cwd
 }
 
-// findAgentProcess returns the kind of supported agent running anywhere in the
-// descendant process tree of shellPID, or "" if none. Agents like claude may be
-// grandchildren of the shell (shell → launcher → agent), so we walk the tree
-// breadth-first using pgrep, which is available on macOS and Linux.
-func findAgentProcess(shellPID int) string {
-	if shellPID <= 0 {
+// ProcessCwd returns the live working directory of a process, tracked through
+// chdir, via lsof (available on macOS and Linux). Returns "" on failure.
+func ProcessCwd(pid int) string {
+	if pid <= 0 {
 		return ""
+	}
+	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	if err != nil {
+		return ""
+	}
+	// -Fn output looks like:
+	//   p1234
+	//   fcwd
+	//   n/some/path
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") && len(line) > 1 {
+			return line[1:]
+		}
+	}
+	return ""
+}
+
+// findAgentProcess returns the PID and kind of a supported agent running
+// anywhere in the descendant process tree of shellPID, or (0, "") if none.
+// Agents like claude may be grandchildren of the shell (shell → launcher →
+// agent), so we walk the tree breadth-first using pgrep, which is available on
+// macOS and Linux.
+func findAgentProcess(shellPID int) (int, string) {
+	if shellPID <= 0 {
+		return 0, ""
 	}
 	visited := map[int]bool{}
 	queue := []int{shellPID}
@@ -67,14 +93,14 @@ func findAgentProcess(shellPID int) string {
 			}
 			switch child.name {
 			case AgentClaude:
-				return AgentClaude
+				return child.pid, AgentClaude
 			case AgentCodex:
-				return AgentCodex
+				return child.pid, AgentCodex
 			}
 			queue = append(queue, child.pid)
 		}
 	}
-	return ""
+	return 0, ""
 }
 
 type childProc struct {
@@ -131,10 +157,12 @@ func claudeSlug(cwd string) string {
 	return b.String()
 }
 
-// FindCodexSessionID returns the most recent Codex session ID found under
-// ~/.codex/sessions. Codex names files rollout-*.jsonl and records the ID in
-// the first line's payload.session_id.
-func FindCodexSessionID() string {
+// FindCodexSessionID returns the most recent Codex session ID rooted at cwd.
+// Codex names files ~/.codex/sessions/**/rollout-*.jsonl and records
+// payload.session_id and payload.cwd in the first line. Sessions from other
+// working directories are skipped so we never resume the wrong project; an
+// empty cwd falls back to the newest session overall.
+func FindCodexSessionID(cwd string) string {
 	root := filepath.Join(homeDir(), ".codex", "sessions")
 	var files []string
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -146,9 +174,7 @@ func FindCodexSessionID() string {
 		}
 		return nil
 	})
-	if len(files) == 0 {
-		return ""
-	}
+	// Newest first.
 	sort.Slice(files, func(i, j int) bool {
 		fi, ei := fileModTime(files[i]), fileModTime(files[j])
 		if fi.Equal(ei) {
@@ -156,13 +182,28 @@ func FindCodexSessionID() string {
 		}
 		return fi.After(ei)
 	})
-	return readCodexSessionID(files[0])
+	var fallback string
+	for _, f := range files {
+		id, sessionCwd := readCodexSessionMeta(f)
+		if id == "" {
+			continue
+		}
+		if cwd == "" && fallback == "" {
+			fallback = id
+		}
+		if sessionCwd == cwd {
+			return id
+		}
+	}
+	return fallback
 }
 
-func readCodexSessionID(path string) string {
+// readCodexSessionMeta extracts the session ID and cwd from the session_meta
+// line at the head of a Codex rollout file.
+func readCodexSessionMeta(path string) (id, cwd string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	// Only the first line carries session_meta; scan just the head.
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -176,17 +217,19 @@ func readCodexSessionID(path string) string {
 			Payload struct {
 				SessionID string `json:"session_id"`
 				ID        string `json:"id"`
+				Cwd       string `json:"cwd"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal(line, &meta); err != nil {
-			return ""
+			return "", ""
 		}
-		if meta.Payload.SessionID != "" {
-			return meta.Payload.SessionID
+		id = meta.Payload.SessionID
+		if id == "" {
+			id = meta.Payload.ID
 		}
-		return meta.Payload.ID
+		return id, meta.Payload.Cwd
 	}
-	return ""
+	return "", ""
 }
 
 // newestJSONLStem returns the filename stem (without .jsonl) of the most

@@ -792,6 +792,10 @@ func (h *webHub) snapshotLoop(interval time.Duration) {
 // snapshot writes the current window layout (and optional history) to disk if
 // anything changed since the last snapshot.
 func (h *webHub) snapshot() error {
+	// Refresh agent/session and live cwd metadata first so this snapshot
+	// captures them (the refresh itself may set dirty).
+	h.refreshAgents()
+
 	h.mu.Lock()
 	if !h.dirty {
 		h.mu.Unlock()
@@ -833,9 +837,6 @@ func (h *webHub) snapshot() error {
 	}
 	h.mu.Unlock()
 
-	// Agent detection runs outside the hub lock; it shells out to pgrep.
-	h.refreshAgents()
-
 	if err := persist.Write(h.persistDir, snap); err != nil {
 		return err
 	}
@@ -859,30 +860,44 @@ func (h *webHub) snapshot() error {
 }
 
 // refreshAgents updates each shell window's agent/session metadata by probing
-// its child processes.
+// its child processes, and tracks the live working directory (shells may cd
+// after creation; an agent's own cwd determines which session to resume).
 func (h *webHub) refreshAgents() {
 	h.mu.Lock()
 	type probe struct {
 		id  int64
 		pid int
-		cwd string
 	}
 	var probes []probe
 	for _, w := range h.windows {
 		if w.Kind == persist.KindShell && w.pid > 0 {
-			probes = append(probes, probe{id: w.ID, pid: w.pid, cwd: w.cwd})
+			probes = append(probes, probe{id: w.ID, pid: w.pid})
 		}
 	}
 	h.mu.Unlock()
 
 	for _, pb := range probes {
-		ref := persist.DetectAgentForPID(pb.pid, pb.cwd)
+		// Shell out outside the hub lock.
+		ref, agentCwd := persist.DetectAgentForPID(pb.pid)
+		shellCwd := ""
+		if ref == nil {
+			shellCwd = persist.ProcessCwd(pb.pid)
+		}
+
 		h.mu.Lock()
 		if win, ok := h.windows[pb.id]; ok {
 			if ref != nil {
 				win.agentKind, win.agentSession = ref.Kind, ref.SessionID
+				if agentCwd != "" && agentCwd != win.cwd {
+					win.cwd = agentCwd
+					h.dirty = true
+				}
 			} else {
 				win.agentKind, win.agentSession = "", ""
+				if shellCwd != "" && shellCwd != win.cwd {
+					win.cwd = shellCwd
+					h.dirty = true
+				}
 			}
 		}
 		h.mu.Unlock()
