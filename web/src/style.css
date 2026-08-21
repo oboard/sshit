@@ -29,14 +29,30 @@
     width: 100%;
     height: 100%;
     margin: 0;
+    /* Never rubber-band or pull-to-refresh the workspace on touch devices. */
+    overscroll-behavior: none;
+  }
+
+  /* Follow the on-screen keyboard on Android (interactive-widget=resizes-content)
+     and the collapsing URL bar on iOS. */
+  #app {
+    height: 100dvh;
   }
 
   body {
     overflow: hidden;
+    /* Remove the grey flash when tapping buttons on iOS/Android. */
+    -webkit-tap-highlight-color: transparent;
     background:
       radial-gradient(circle at 30% 0%, rgba(192, 38, 211, 0.22), transparent 32rem),
       radial-gradient(circle at 80% 20%, rgba(37, 99, 235, 0.2), transparent 28rem),
       #111111;
+  }
+
+  /* Taps on buttons should never trigger double-tap zoom delays. */
+  button,
+  a {
+    touch-action: manipulation;
   }
 }
 

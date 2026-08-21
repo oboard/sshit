@@ -19,8 +19,8 @@
     input: { id: number; data: string };
     resize: { id: number; cols: number; rows: number; width: number; height: number };
     close: { id: number };
-    startMove: { id: number; event: MouseEvent };
-    startResize: { id: number; event: MouseEvent; width: number; height: number };
+    startMove: { id: number; event: PointerEvent };
+    startResize: { id: number; event: PointerEvent; width: number; height: number };
     focus: { id: number };
     blur: { id: number };
   }>();

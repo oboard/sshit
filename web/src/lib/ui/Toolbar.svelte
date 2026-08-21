@@ -21,7 +21,7 @@
   }>();
 </script>
 
-<div class="panel inline-block px-3 py-2">
+<div class="panel toolbar inline-block px-3 py-2">
   <div class="flex items-center select-none">
     <a href="/" class="flex-shrink-0 text-lg font-semibold tracking-tight">
       sshit
@@ -70,5 +70,12 @@
 
   .icon-button.active {
     @apply bg-indigo-600/30 text-white ring-1 ring-indigo-400/40;
+  }
+
+  /* Comfortable 40px+ tap targets on phones and tablets. */
+  @media (pointer: coarse) {
+    .toolbar button {
+      @apply p-2.5;
+    }
   }
 </style>

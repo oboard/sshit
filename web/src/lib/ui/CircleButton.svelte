@@ -20,8 +20,8 @@
 </script>
 
 <button
-  class="w-3 h-3 p-[1px] rounded-full {details[kind].cls}"
-  on:mousedown|stopPropagation
+  class="circle-button relative w-3 h-3 p-[1px] rounded-full {details[kind].cls}"
+  on:pointerdown|stopPropagation
   on:click
 >
   <svelte:component
@@ -30,3 +30,15 @@
     strokeWidth={3}
   />
 </button>
+
+<style lang="postcss">
+  /* Enlarge the tappable area on touch devices without changing the
+     12px visual size of the traffic-light button. */
+  @media (pointer: coarse) {
+    .circle-button::before {
+      content: "";
+      position: absolute;
+      inset: -11px;
+    }
+  }
+</style>

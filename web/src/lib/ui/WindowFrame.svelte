@@ -21,8 +21,8 @@
     yellow: { id: number };
     green: { id: number };
     focus: { id: number };
-    startMove: { id: number; event: MouseEvent };
-    startResize: { id: number; event: MouseEvent; width: number; height: number };
+    startMove: { id: number; event: PointerEvent };
+    startResize: { id: number; event: PointerEvent; width: number; height: number };
   }>();
 </script>
 
@@ -34,22 +34,23 @@
   data-no-pan
   role="group"
   aria-label={ariaLabel}
-  on:mousedown|stopPropagation={() => dispatch("focus", { id })}
-  on:pointerdown|stopPropagation
+  on:pointerdown|stopPropagation={() => dispatch("focus", { id })}
   on:wheel|stopPropagation
 >
+  <!-- touch-action: none keeps the browser from stealing window drags. -->
   <div
     class="flex cursor-move select-none items-center"
+    style="touch-action: none;"
     role="toolbar"
     tabindex="-1"
     aria-label="{title} window controls"
-    on:mousedown|stopPropagation={(event) => dispatch("startMove", { id, event })}
+    on:pointerdown|stopPropagation={(event) => dispatch("startMove", { id, event })}
   >
     <div class="flex flex-1 items-center px-3">
       <CircleButtons>
-        <CircleButton kind="red" on:mousedown={(event) => event.button === 0 && dispatch("close", { id })} />
-        <CircleButton kind="yellow" on:mousedown={(event) => event.button === 0 && dispatch("yellow", { id })} />
-        <CircleButton kind="green" on:mousedown={(event) => event.button === 0 && dispatch("green", { id })} />
+        <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && dispatch("close", { id })} />
+        <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && dispatch("yellow", { id })} />
+        <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && dispatch("green", { id })} />
       </CircleButtons>
     </div>
     <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
@@ -63,11 +64,11 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
+    style="touch-action: none;"
     role="separator"
     aria-label={resizeLabel}
     title={resizeLabel}
-    on:mousedown|stopPropagation={(event) => dispatch("startResize", { id, event, width, height })}
-    on:pointerdown|stopPropagation
+    on:pointerdown|stopPropagation={(event) => dispatch("startResize", { id, event, width, height })}
   ></div>
 </div>
 
@@ -85,5 +86,16 @@
     content: "";
     @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 border-zinc-500;
     pointer-events: none;
+  }
+
+  /* Fingers need a much larger grab target than a mouse cursor. */
+  @media (pointer: coarse) {
+    .resize-handle {
+      @apply -bottom-2 -right-2 h-9 w-9;
+    }
+
+    .resize-handle::after {
+      @apply bottom-2 right-2 h-3 w-3 border-zinc-400;
+    }
   }
 </style>
