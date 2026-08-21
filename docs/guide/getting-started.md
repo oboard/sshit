@@ -7,15 +7,16 @@
 Linux x64、macOS arm64 和 macOS x64 可使用安装脚本：
 
 ```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/oboard/sshit/main/install.sh | bash
+curl -fsSL https://sshit.oboard.fun/install.sh | bash
 ```
 
 默认安装目录为 `/usr/local/bin`。如需安装到用户目录：
 
 ```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/oboard/sshit/main/install.sh \
-  | INSTALL_DIR="$HOME/.local/bin" bash
+curl -fsSL https://sshit.oboard.fun/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
 ```
+
+安装脚本由本站托管，同时会自动识别操作系统和 CPU 架构，并下载最新 GitHub Release 中对应的二进制文件。
 
 其他平台请从 [GitHub Releases](https://github.com/oboard/sshit/releases) 下载构建产物。
 

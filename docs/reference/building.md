@@ -43,4 +43,4 @@ pnpm run docs:preview
 
 ## 发行产物
 
-GitHub Actions 会构建 Linux x64、macOS arm64/x64 和 Windows x64 二进制。推送 `v*` 标签会创建 GitHub Release 并上传相应发行文件。
+GitHub Actions 会构建 Linux x64、macOS arm64/x64 和 Windows x64 二进制。推送 `v*` 标签会创建 GitHub Release 并上传相应发行文件。文档站点的 `public/install.sh` 会随站点部署到 `https://sshit.oboard.fun/install.sh`，为 Linux 和 macOS 用户提供一键安装入口。
