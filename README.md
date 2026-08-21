@@ -83,7 +83,10 @@ SSH sessions start the service process's `$SHELL`, falling back to `/bin/sh` whe
 # Choose a port
 sshit --port 2022
 
-# Short form
+# Bind to a specific address (short form: -a)
+sshit --address 127.0.0.1 --port 2022
+
+# Short form for the port
 sshit -p 2022
 
 # Connect to that port

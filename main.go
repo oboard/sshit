@@ -1189,6 +1189,12 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 	}
 }
 
+// listenAddress combines a host/address and TCP port into the address accepted
+// by net.Listen. net.JoinHostPort also handles IPv6 literals correctly.
+func listenAddress(address string, port int) string {
+	return net.JoinHostPort(address, strconv.Itoa(port))
+}
+
 func newHTTPHandler(hub *webHub) (http.Handler, error) {
 	dist, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
@@ -1210,6 +1216,8 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 }
 
 func main() {
+	address := flag.String("address", "0.0.0.0", "address to listen on")
+	flag.StringVar(address, "a", "0.0.0.0", "address to listen on")
 	port := flag.Int("port", 2222, "port to listen on")
 	flag.IntVar(port, "p", 2222, "port to listen on")
 	password := flag.String("password", "", "password required for SSH and Web UI access")
@@ -1258,7 +1266,7 @@ func main() {
 	}
 	httpServer := &http.Server{Handler: httpHandler}
 
-	addr := fmt.Sprintf("0.0.0.0:%d", *port)
+	addr := listenAddress(*address, *port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatal(err)
