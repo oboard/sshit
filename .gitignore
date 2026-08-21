@@ -11,6 +11,7 @@ coverage.out
 # Frontend dependencies and generated assets
 web/node_modules/
 internal/web/dist/
+node_modules/
 
 # Local editor files
 .DS_Store

@@ -36,14 +36,13 @@ SSH is reliable, universal, and script-friendly, while a Web UI makes ad-hoc acc
 The installer fetches the latest release for Linux x64, macOS arm64, or macOS x64:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | bash
+curl -fsSL https://sshit.oboard.fun/install.sh | bash
 ```
 
 It installs to `/usr/local/bin` by default. To use a directory in your home folder instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh \
-  | INSTALL_DIR="$HOME/.local/bin" bash
+curl -fsSL https://sshit.oboard.fun/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
 Download binaries for other supported platforms from [GitHub Releases](https://github.com/oboard/sshit/releases).

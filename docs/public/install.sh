@@ -23,12 +23,20 @@ case "$(uname -m)" in
 esac
 
 asset="sshit-${os}-${arch}"
-url="https://github.com/${repo}/releases/latest/download/${asset}"
+release_url="https://github.com/${repo}/releases/latest/download/${asset}"
+# ghfast.top proxies GitHub URLs for networks that cannot reach github.com directly.
+mirror_url="https://ghfast.top/${release_url}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 printf 'Downloading %s...\n' "$asset"
-curl --fail --location --silent --show-error "$url" --output "$tmp_dir/sshit"
+if ! curl --fail --location --silent --show-error --connect-timeout 10 \
+  "$release_url" --output "$tmp_dir/sshit"; then
+  echo "GitHub download failed; retrying through the mirror..." >&2
+  rm -f "$tmp_dir/sshit"
+  curl --fail --location --silent --show-error --connect-timeout 10 \
+    "$mirror_url" --output "$tmp_dir/sshit"
+fi
 chmod +x "$tmp_dir/sshit"
 
 if [[ -w "$install_dir" ]]; then
