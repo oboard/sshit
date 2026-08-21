@@ -40,24 +40,19 @@
   $: src = cursorUrl(cursorAssetName(user.cursorStyle));
 </script>
 
-<div
-  class="relative h-8 w-8"
-  role="presentation"
-  on:mouseenter={() => (hovering = true)}
-  on:mouseleave={() => (hovering = false)}
->
-  <img
-    {src}
-    alt=""
-    draggable="false"
-    class="h-8 w-8 select-none"
-  />
-  {#if showName || hovering || time - lastMove < 1500}
+{#if showName || hovering || time - lastMove < 1500}
+  <div
+    class="relative h-8 w-8"
+    role="presentation"
+    on:mouseenter={() => (hovering = true)}
+    on:mouseleave={() => (hovering = false)}
+  >
+    <img {src} alt="" draggable="false" class="h-8 w-8 select-none" />
     <p
       class="absolute left-0 top-8 mt-4 w-max bg-zinc-700 text-xs px-1.5 py-[1px] rounded font-medium"
       transition:fade|local={{ duration: 150 }}
     >
       {user.name}
     </p>
-  {/if}
-</div>
+  </div>
+{/if}

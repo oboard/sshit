@@ -173,7 +173,12 @@
           }
         });
       }
-      if (update.selectionSet || update.docChanged || update.focusChanged) {
+      if (update.focusChanged && !update.view.hasFocus) {
+        getActiveCollab()?.clearDocCursor(docId);
+      } else if (
+        update.view.hasFocus &&
+        (update.selectionSet || update.docChanged || update.focusChanged)
+      ) {
         broadcastLocalAwareness();
       }
     });
