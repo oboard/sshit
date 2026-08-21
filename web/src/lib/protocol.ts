@@ -1,6 +1,35 @@
 type Sid = number; // u32
 type Uid = number; // u32
 
+/** A workspace window. Shell and editor windows share one list, told apart by kind. */
+export type WindowState = {
+  id: number;
+  kind: "shell" | "editor";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  /** Shell-only: terminal grid size. */
+  cols?: number;
+  rows?: number;
+  /** Shell-only: replay scrollback sent on hello/state. */
+  buffer?: string;
+  /** Editor-only: collaborative document id. */
+  docId?: string;
+};
+
+/** Patch applied to a window; absent fields are unchanged. */
+export type WindowPatch = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  zIndex?: number;
+  cols?: number;
+  rows?: number;
+};
+
 /** Position and size of a window, see the Rust version. */
 export type WsWinsize = {
   x: number;

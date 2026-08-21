@@ -17,10 +17,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"sshit/internal/persist"
 	"sshit/internal/web"
 
 	"github.com/creack/pty"
@@ -237,7 +240,7 @@ func shellHandler(s ssh.Session) {
 
 type wsEnvelope struct {
 	Type        string          `json:"type"`
-	ID          int             `json:"id,omitempty"`
+	ID          int64           `json:"id,omitempty"`
 	Name        string          `json:"name,omitempty"`
 	Color       string          `json:"color,omitempty"`
 	ClientID    string          `json:"clientId,omitempty"`
@@ -253,34 +256,26 @@ type wsEnvelope struct {
 	Data        string          `json:"data,omitempty"`
 	Password    string          `json:"password,omitempty"`
 	Update      string          `json:"update,omitempty"`
+	Kind        string          `json:"kind,omitempty"`
+	DocID       string          `json:"docId,omitempty"`
 	Users       []webUser       `json:"users"`
-	Shells      []webShellState `json:"shells"`
+	Windows     []windowState   `json:"windows"`
 	User        *webUser        `json:"user,omitempty"`
-	Shell       *webShellState  `json:"shell,omitempty"`
 
-	EditorWindows []editorWindowState `json:"editorWindows"`
-	EditorWindow  *editorWindowState  `json:"editorWindow,omitempty"`
-	Patch         *editorWindowPatch  `json:"patch,omitempty"`
-	WindowID      int64               `json:"windowId,omitempty"`
+	Patch    *windowPatch `json:"patch,omitempty"`
+	WindowID int64        `json:"windowId,omitempty"`
 }
 
-type editorWindowState struct {
-	ID     int64  `json:"id"`
-	DocID  string `json:"docId"`
-	Kind   string `json:"kind"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-	ZIndex int    `json:"zIndex"`
-}
-
-type editorWindowPatch struct {
-	X      *int `json:"x,omitempty"`
-	Y      *int `json:"y,omitempty"`
-	Width  *int `json:"width,omitempty"`
-	Height *int `json:"height,omitempty"`
-	ZIndex *int `json:"zIndex,omitempty"`
+// windowPatch carries optional updates to a window's geometry, z-order and
+// (for shells) terminal size. Nil fields are left unchanged.
+type windowPatch struct {
+	X      *int    `json:"x,omitempty"`
+	Y      *int    `json:"y,omitempty"`
+	Width  *int    `json:"width,omitempty"`
+	Height *int    `json:"height,omitempty"`
+	ZIndex *int    `json:"zIndex,omitempty"`
+	Cols   *uint16 `json:"cols,omitempty"`
+	Rows   *uint16 `json:"rows,omitempty"`
 }
 
 type webUser struct {
@@ -292,21 +287,38 @@ type webUser struct {
 	CursorStyle string `json:"cursorStyle,omitempty"`
 }
 
-type webShellState struct {
-	ID     int    `json:"id"`
+// windowState is the serializable state of one workspace window. Shell and
+// editor windows share this shape and are told apart by Kind.
+type windowState struct {
+	ID     int64  `json:"id"`
+	Kind   string `json:"kind"`
 	X      int    `json:"x"`
 	Y      int    `json:"y"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
-	Cols   uint16 `json:"cols"`
-	Rows   uint16 `json:"rows"`
+	ZIndex int    `json:"zIndex"`
+
+	// Shell-only.
+	Cols   uint16 `json:"cols,omitempty"`
+	Rows   uint16 `json:"rows,omitempty"`
 	Buffer string `json:"buffer,omitempty"`
+
+	// Editor-only.
+	DocID string `json:"docId,omitempty"`
 }
 
-type webShell struct {
-	webShellState
+// webWindow is the runtime form of a window. PTY/buffer/cwd/agent only apply
+// to shell windows; editor windows are pure layout state.
+type webWindow struct {
+	windowState
 	pty    *os.File
+	pid    int
 	buffer []byte
+
+	cwd           string
+	agentKind     string
+	agentSession  string
+	historyOffset int
 }
 
 type webClient struct {
@@ -344,40 +356,55 @@ type webHub struct {
 	nextID        int
 	collabSeq     int
 	clients       map[int]*webClient
-	shells        map[int]*webShell
-	shellSeq      int
+	windows       map[int64]*webWindow
+	idSeq         int64
+	topZ          int
 	password      string
 	collabClients map[*collabClient]bool
 	collabUpdates [][]byte
-	editorWindows map[int64]*editorWindowState
+
+	persistDir  string
+	persist     bool
+	saveHistory bool
+	dirty       bool
+	snapMu      sync.Mutex
 }
 
-func newWebHub(password string) *webHub {
+func newWebHub(password, persistDir string, persistEnabled, saveHistory bool) *webHub {
 	return &webHub{
 		clients:       make(map[int]*webClient),
-		shells:        make(map[int]*webShell),
+		windows:       make(map[int64]*webWindow),
 		password:      password,
 		collabClients: make(map[*collabClient]bool),
-		editorWindows: make(map[int64]*editorWindowState),
+		persistDir:    persistDir,
+		persist:       persistEnabled,
+		saveHistory:   saveHistory,
 	}
 }
 
-func (h *webHub) snapshotLocked() (users []webUser, shells []webShellState, editorWindows []editorWindowState) {
+// snapshotLocked returns the user list and all windows sorted by ID. The
+// caller must hold h.mu.
+func (h *webHub) snapshotLocked() (users []webUser, windows []windowState) {
 	users = make([]webUser, 0, len(h.clients))
-	shells = make([]webShellState, 0, len(h.shells))
-	editorWindows = make([]editorWindowState, 0, len(h.editorWindows))
+	windows = make([]windowState, 0, len(h.windows))
 	for _, c := range h.clients {
 		users = append(users, webUser{ID: c.id, Name: c.name, X: c.x, Y: c.y, Cursor: true})
 	}
-	for _, s := range h.shells {
-		state := s.webShellState
-		state.Buffer = string(s.buffer)
-		shells = append(shells, state)
+	for _, w := range h.windows {
+		state := w.windowState
+		if w.Kind == persist.KindShell {
+			state.Buffer = string(w.buffer)
+		}
+		windows = append(windows, state)
 	}
-	for _, w := range h.editorWindows {
-		editorWindows = append(editorWindows, *w)
-	}
-	return users, shells, editorWindows
+	sort.Slice(windows, func(i, j int) bool { return windows[i].ID < windows[j].ID })
+	return users, windows
+}
+
+func (h *webHub) markDirty() {
+	h.mu.Lock()
+	h.dirty = true
+	h.mu.Unlock()
 }
 
 func (h *webHub) broadcast(msg wsEnvelope) {
@@ -393,9 +420,9 @@ func (h *webHub) broadcast(msg wsEnvelope) {
 
 func (h *webHub) broadcastState() {
 	h.mu.Lock()
-	users, shells, editorWindows := h.snapshotLocked()
+	users, windows := h.snapshotLocked()
 	h.mu.Unlock()
-	h.broadcast(wsEnvelope{Type: "state", Users: users, Shells: shells, EditorWindows: editorWindows})
+	h.broadcast(wsEnvelope{Type: "state", Users: users, Windows: windows})
 }
 
 func (h *webHub) addClient(conn *websocket.Conn) *webClient {
@@ -412,10 +439,10 @@ func (h *webHub) addClient(conn *websocket.Conn) *webClient {
 	if client.authenticated {
 		h.clients[client.id] = client
 	}
-	users, shells, editorWindows := h.snapshotLocked()
+	users, windows := h.snapshotLocked()
 	h.mu.Unlock()
 	if client.authenticated {
-		client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells, EditorWindows: editorWindows}
+		client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows}
 		h.broadcastState()
 	} else {
 		client.send <- wsEnvelope{Type: "authRequired"}
@@ -437,117 +464,399 @@ func (h *webHub) removeClient(id int) {
 	}
 }
 
-func (h *webHub) createShell(x, y int, cols, rows uint16) (*webShell, error) {
+// createShell starts a new shell window running command (or the default shell
+// when command is empty) in cwd, and registers it with the hub.
+func (h *webHub) createShell(x, y int, cols, rows, width, height, zIndex int, cwd string, command []string) (*webWindow, error) {
 	if cols == 0 {
 		cols = 80
 	}
 	if rows == 0 {
 		rows = 24
 	}
-	cmd := exec.Command(defaultShell())
+	if width == 0 {
+		width = 760
+	}
+	if height == 0 {
+		height = 420
+	}
+	if cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+
+	var cmd *exec.Cmd
+	if len(command) > 0 {
+		cmd = exec.Command(command[0], command[1:]...)
+	} else {
+		cmd = exec.Command(defaultShell())
+	}
+	cmd.Dir = cwd
 	cmd.Env = terminalEnv("xterm-256color")
-	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
 		return nil, err
 	}
 
 	h.mu.Lock()
-	h.shellSeq++
-	shell := &webShell{
-		webShellState: webShellState{ID: h.shellSeq, X: x, Y: y, Width: 760, Height: 420, Cols: cols, Rows: rows},
-		pty:           p,
+	h.idSeq++
+	h.topZ++
+	if zIndex <= 0 {
+		zIndex = h.topZ
 	}
-	h.shells[shell.ID] = shell
+	if zIndex > h.topZ {
+		h.topZ = zIndex
+	}
+	win := &webWindow{
+		windowState: windowState{
+			ID: h.idSeq, Kind: persist.KindShell,
+			X: x, Y: y, Width: width, Height: height, ZIndex: zIndex,
+			Cols: uint16(cols), Rows: uint16(rows),
+		},
+		pty: p,
+		pid: cmd.Process.Pid,
+		cwd: cwd,
+	}
+	h.windows[win.ID] = win
+	h.dirty = true
 	h.mu.Unlock()
 
-	go h.readShell(shell)
+	go h.readShell(win)
 	h.broadcastState()
-	return shell, nil
+	return win, nil
 }
 
-func (h *webHub) readShell(shell *webShell) {
+func (h *webHub) readShell(win *webWindow) {
 	buf := make([]byte, 32*1024)
 	for {
-		n, err := shell.pty.Read(buf)
+		n, err := win.pty.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
 			h.mu.Lock()
-			shell.buffer = append(shell.buffer, chunk...)
-			if len(shell.buffer) > 1<<20 {
-				shell.buffer = shell.buffer[len(shell.buffer)-(1<<20):]
+			win.buffer = append(win.buffer, chunk...)
+			if len(win.buffer) > 1<<20 {
+				win.buffer = win.buffer[len(win.buffer)-(1<<20):]
 			}
+			h.dirty = true
 			h.mu.Unlock()
-			h.broadcast(wsEnvelope{Type: "output", ID: shell.ID, Data: string(chunk)})
+			h.broadcast(wsEnvelope{Type: "output", ID: win.ID, Data: string(chunk)})
 		}
 		if err != nil {
-			h.closeShell(shell.ID)
+			h.closeWindow(win.ID)
 			return
 		}
 	}
 }
 
-func (h *webHub) closeShell(id int) {
+// createEditorWindow registers a new editor window. The ID is assigned by the
+// hub so shell and editor windows share one ID space.
+func (h *webHub) createEditorWindow(x, y, width, height int, docID string) {
+	if width == 0 {
+		width = 980
+	}
+	if height == 0 {
+		height = 620
+	}
+	if docID == "" {
+		docID = fmt.Sprintf("doc-%d", time.Now().UnixNano())
+	}
+
 	h.mu.Lock()
-	shell, ok := h.shells[id]
+	h.idSeq++
+	h.topZ++
+	win := &webWindow{
+		windowState: windowState{
+			ID: h.idSeq, Kind: persist.KindEditor, DocID: docID,
+			X: x, Y: y, Width: width, Height: height, ZIndex: h.topZ,
+		},
+	}
+	h.windows[win.ID] = win
+	h.dirty = true
+	h.mu.Unlock()
+	h.broadcastState()
+}
+
+// patchWindow applies a geometry/z-order/size patch to any window. For shells
+// with a terminal size change it also resizes the PTY.
+func (h *webHub) patchWindow(id int64, patch windowPatch) {
+	h.mu.Lock()
+	win, ok := h.windows[id]
 	if ok {
-		delete(h.shells, id)
+		if patch.X != nil {
+			win.X = *patch.X
+		}
+		if patch.Y != nil {
+			win.Y = *patch.Y
+		}
+		if patch.Width != nil {
+			win.Width = *patch.Width
+		}
+		if patch.Height != nil {
+			win.Height = *patch.Height
+		}
+		if patch.ZIndex != nil {
+			win.ZIndex = *patch.ZIndex
+			if *patch.ZIndex > h.topZ {
+				h.topZ = *patch.ZIndex
+			}
+		}
+		if win.Kind == persist.KindShell {
+			if patch.Cols != nil {
+				win.Cols = *patch.Cols
+			}
+			if patch.Rows != nil {
+				win.Rows = *patch.Rows
+			}
+		}
+		h.dirty = true
 	}
 	h.mu.Unlock()
+
+	if ok && win.Kind == persist.KindShell && (patch.Cols != nil || patch.Rows != nil) {
+		_ = pty.Setsize(win.pty, &pty.Winsize{Cols: win.Cols, Rows: win.Rows})
+	}
 	if ok {
-		_ = shell.pty.Close()
 		h.broadcastState()
 	}
 }
 
-func (h *webHub) shell(id int) *webShell {
+func (h *webHub) closeWindow(id int64) {
+	h.mu.Lock()
+	win, ok := h.windows[id]
+	if ok {
+		delete(h.windows, id)
+		h.dirty = true
+	}
+	h.mu.Unlock()
+	if ok {
+		if win.pty != nil {
+			_ = win.pty.Close()
+		}
+		if h.persist {
+			_ = persist.DeleteHistory(h.persistDir, id)
+		}
+		h.broadcastState()
+	}
+}
+
+func (h *webHub) window(id int64) *webWindow {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.shells[id]
+	return h.windows[id]
 }
 
-func (h *webHub) createEditorWindow(state editorWindowState) {
+const restoredMarker = "\r\n\x1b[2m── session restored after restart ──\x1b[0m\r\n"
+
+// restore rebuilds the workspace from the on-disk snapshot. It returns true
+// when at least one window was restored; the caller creates a default shell
+// when it returns false.
+func (h *webHub) restore() bool {
+	if !h.persist {
+		return false
+	}
+	snap, err := persist.Load(h.persistDir)
+	if err != nil {
+		log.Printf("failed to load session snapshot: %v", err)
+		return false
+	}
+	if len(snap.Windows) == 0 {
+		return false
+	}
+
+	restored := false
+	for _, saved := range snap.Windows {
+		switch saved.Kind {
+		case persist.KindEditor:
+			h.mu.Lock()
+			h.idSeq = saved.ID
+			if saved.ZIndex > h.topZ {
+				h.topZ = saved.ZIndex
+			}
+			win := &webWindow{windowState: windowState{
+				ID: saved.ID, Kind: persist.KindEditor, DocID: saved.DocID,
+				X: saved.X, Y: saved.Y, Width: saved.Width, Height: saved.Height, ZIndex: saved.ZIndex,
+			}}
+			h.windows[win.ID] = win
+			h.mu.Unlock()
+			restored = true
+		case persist.KindShell:
+			if err := h.restoreShell(saved); err != nil {
+				log.Printf("failed to restore shell %d: %v", saved.ID, err)
+				continue
+			}
+			restored = true
+		}
+	}
+	if snap.IDSeq > h.idSeq {
+		h.idSeq = snap.IDSeq
+	}
+	return restored
+}
+
+// restoreShell rebuilds one shell window: it resumes the agent session when one
+// was recorded, otherwise starts a fresh shell in the saved working directory,
+// then replays any saved scrollback into the buffer for visual continuity.
+func (h *webHub) restoreShell(saved persist.Window) error {
+	command := persist.ResumeCommand(saved.Agent)
+
+	if cols := saved.Cols; cols == 0 {
+		saved.Cols = 80
+	}
+	if rows := saved.Rows; rows == 0 {
+		saved.Rows = 24
+	}
+
+	var cmd *exec.Cmd
+	if len(command) > 0 {
+		cmd = exec.Command(command[0], command[1:]...)
+	} else {
+		cmd = exec.Command(defaultShell())
+	}
+	cwd := saved.Cwd
+	if cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+	cmd.Dir = cwd
+	cmd.Env = terminalEnv("xterm-256color")
+	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: saved.Cols, Rows: saved.Rows})
+	if err != nil {
+		return err
+	}
+
+	win := &webWindow{
+		windowState: windowState{
+			ID: saved.ID, Kind: persist.KindShell,
+			X: saved.X, Y: saved.Y, Width: saved.Width, Height: saved.Height, ZIndex: saved.ZIndex,
+			Cols: saved.Cols, Rows: saved.Rows,
+		},
+		pty: p,
+		pid: cmd.Process.Pid,
+		cwd: cwd,
+	}
+
+	// Replay saved scrollback so the pane shows its previous screen contents.
+	if h.saveHistory {
+		if history, err := persist.ReadHistory(h.persistDir, saved.ID); err == nil && len(history) > 0 {
+			win.buffer = append(win.buffer, history...)
+			win.buffer = append(win.buffer, restoredMarker...)
+			win.historyOffset = len(win.buffer)
+		}
+	}
+
 	h.mu.Lock()
-	stored := state
-	h.editorWindows[state.ID] = &stored
+	h.windows[win.ID] = win
+	if saved.ZIndex > h.topZ {
+		h.topZ = saved.ZIndex
+	}
+	h.dirty = true
 	h.mu.Unlock()
-	h.broadcast(wsEnvelope{Type: "editorWindowCreated", EditorWindow: &stored})
+
+	go h.readShell(win)
+	return nil
 }
 
-func (h *webHub) patchEditorWindow(id int64, patch editorWindowPatch) {
+// snapshotLoop periodically persists the workspace when it has changed.
+func (h *webHub) snapshotLoop(interval time.Duration) {
+	if !h.persist {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := h.snapshot(); err != nil {
+			log.Printf("failed to persist session: %v", err)
+		}
+	}
+}
+
+// snapshot writes the current window layout (and optional history) to disk if
+// anything changed since the last snapshot.
+func (h *webHub) snapshot() error {
 	h.mu.Lock()
-	window, ok := h.editorWindows[id]
-	if ok {
-		if patch.X != nil {
-			window.X = *patch.X
+	if !h.dirty {
+		h.mu.Unlock()
+		return nil
+	}
+	h.dirty = false
+
+	snap := &persist.Snapshot{IDSeq: h.idSeq, Windows: make([]persist.Window, 0, len(h.windows))}
+	type historyWrite struct {
+		id   int64
+		data []byte
+	}
+	var histories []historyWrite
+	keep := make(map[int64]bool)
+
+	for _, w := range h.windows {
+		pw := persist.Window{
+			ID: w.ID, Kind: w.Kind,
+			X: w.X, Y: w.Y, Width: w.Width, Height: w.Height, ZIndex: w.ZIndex,
+			DocID: w.DocID,
 		}
-		if patch.Y != nil {
-			window.Y = *patch.Y
+		if w.Kind == persist.KindShell {
+			pw.Cols, pw.Rows, pw.Cwd = w.Cols, w.Rows, w.cwd
+			if w.agentKind != "" {
+				pw.Agent = &persist.AgentRef{Kind: w.agentKind, SessionID: w.agentSession}
+			}
+			if h.saveHistory {
+				keep[w.ID] = true
+				if len(w.buffer) > w.historyOffset {
+					histories = append(histories, historyWrite{id: w.ID, data: append([]byte(nil), w.buffer...)})
+				}
+			}
 		}
-		if patch.Width != nil {
-			window.Width = *patch.Width
+		snap.Windows = append(snap.Windows, pw)
+	}
+	h.mu.Unlock()
+
+	// Agent detection runs outside the hub lock; it shells out to pgrep.
+	h.refreshAgents()
+
+	if err := persist.Write(h.persistDir, snap); err != nil {
+		return err
+	}
+	for _, hw := range histories {
+		if err := persist.WriteHistory(h.persistDir, hw.id, hw.data); err != nil {
+			return err
 		}
-		if patch.Height != nil {
-			window.Height = *patch.Height
+		if win := h.window(hw.id); win != nil {
+			h.mu.Lock()
+			win.historyOffset = len(win.buffer)
+			h.mu.Unlock()
 		}
-		if patch.ZIndex != nil {
-			window.ZIndex = *patch.ZIndex
+	}
+	if h.saveHistory {
+		return persist.PruneHistory(h.persistDir, keep)
+	}
+	return nil
+}
+
+// refreshAgents updates each shell window's agent/session metadata by probing
+// its child processes.
+func (h *webHub) refreshAgents() {
+	h.mu.Lock()
+	type probe struct {
+		id  int64
+		pid int
+		cwd string
+	}
+	var probes []probe
+	for _, w := range h.windows {
+		if w.Kind == persist.KindShell && w.pid > 0 {
+			probes = append(probes, probe{id: w.ID, pid: w.pid, cwd: w.cwd})
 		}
 	}
 	h.mu.Unlock()
-	if ok {
-		h.broadcast(wsEnvelope{Type: "editorWindowPatched", WindowID: id, Patch: &patch})
-	}
-}
 
-func (h *webHub) closeEditorWindow(id int64) {
-	h.mu.Lock()
-	_, ok := h.editorWindows[id]
-	if ok {
-		delete(h.editorWindows, id)
-	}
-	h.mu.Unlock()
-	if ok {
-		h.broadcast(wsEnvelope{Type: "editorWindowClosed", WindowID: id})
+	for _, pb := range probes {
+		ref := persist.DetectAgentForPID(pb.pid, pb.cwd)
+		h.mu.Lock()
+		if win, ok := h.windows[pb.id]; ok {
+			if ref != nil {
+				win.agentKind, win.agentSession = ref.Kind, ref.SessionID
+			} else {
+				win.agentKind, win.agentSession = "", ""
+			}
+		}
+		h.mu.Unlock()
 	}
 }
 
@@ -591,7 +900,7 @@ func (h *webHub) addCollabClient(client *collabClient) bool {
 			return false
 		}
 	}
-	ready, err := json.Marshal(wsEnvelope{Type: "ready", ID: len(h.collabUpdates), ClientID: client.clientID, Name: client.name, Color: client.color})
+	ready, err := json.Marshal(wsEnvelope{Type: "ready", ID: int64(len(h.collabUpdates)), ClientID: client.clientID, Name: client.name, Color: client.color})
 	if err != nil {
 		return false
 	}
@@ -779,9 +1088,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					client.authenticated = true
 					hub.clients[client.id] = client
 				}
-				users, shells, editorWindows := hub.snapshotLocked()
+				users, windows := hub.snapshotLocked()
 				hub.mu.Unlock()
-				client.send <- wsEnvelope{Type: "hello", ID: client.id, Users: users, Shells: shells, EditorWindows: editorWindows}
+				client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows}
 				hub.broadcastState()
 			case "setName":
 				if !client.authenticated {
@@ -804,65 +1113,32 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 				if !client.authenticated {
 					continue
 				}
-				if _, err := hub.createShell(msg.X, msg.Y, msg.Cols, msg.Rows); err != nil {
-					log.Printf("failed to create web shell: %v", err)
+				if msg.Kind == persist.KindEditor {
+					hub.createEditorWindow(msg.X, msg.Y, msg.Width, msg.Height, msg.DocID)
+				} else {
+					if _, err := hub.createShell(msg.X, msg.Y, int(msg.Cols), int(msg.Rows), msg.Width, msg.Height, 0, "", nil); err != nil {
+						log.Printf("failed to create web shell: %v", err)
+					}
 				}
 			case "input":
 				if !client.authenticated {
 					continue
 				}
-				if shell := hub.shell(msg.ID); shell != nil {
-					_, _ = shell.pty.Write([]byte(msg.Data))
+				if win := hub.window(msg.ID); win != nil && win.Kind == persist.KindShell && win.pty != nil {
+					_, _ = win.pty.Write([]byte(msg.Data))
 				}
-			case "resize":
-				if !client.authenticated {
-					continue
-				}
-				if shell := hub.shell(msg.ID); shell != nil {
-					if msg.Width > 0 {
-						shell.Width = msg.Width
-					}
-					if msg.Height > 0 {
-						shell.Height = msg.Height
-					}
-					shell.Cols, shell.Rows = msg.Cols, msg.Rows
-					_ = pty.Setsize(shell.pty, &pty.Winsize{Cols: msg.Cols, Rows: msg.Rows})
-					hub.broadcastState()
-				}
-			case "move":
-				if !client.authenticated {
-					continue
-				}
-				hub.mu.Lock()
-				if shell := hub.shells[msg.ID]; shell != nil {
-					shell.X, shell.Y = msg.X, msg.Y
-				}
-				hub.mu.Unlock()
-				hub.broadcastState()
-			case "close":
-				if !client.authenticated {
-					continue
-				}
-				hub.closeShell(msg.ID)
-			case "editorWindowCreate":
-				if !client.authenticated {
-					continue
-				}
-				if msg.EditorWindow != nil {
-					hub.createEditorWindow(*msg.EditorWindow)
-				}
-			case "editorWindowPatch":
+			case "patch":
 				if !client.authenticated {
 					continue
 				}
 				if msg.Patch != nil {
-					hub.patchEditorWindow(msg.WindowID, *msg.Patch)
+					hub.patchWindow(msg.ID, *msg.Patch)
 				}
-			case "editorWindowClose":
+			case "close":
 				if !client.authenticated {
 					continue
 				}
-				hub.closeEditorWindow(msg.WindowID)
+				hub.closeWindow(msg.ID)
 			}
 		}
 	}
@@ -892,6 +1168,8 @@ func main() {
 	port := flag.Int("port", 2222, "port to listen on")
 	flag.IntVar(port, "p", 2222, "port to listen on")
 	password := flag.String("password", "", "password required for SSH and Web UI access")
+	persist := flag.Bool("persist", true, "persist the workspace to ~/.sshit/<port>/ and restore it after a restart")
+	persistHistory := flag.Bool("persist-history", false, "also save terminal scrollback to disk and replay it after a restart (may contain secrets)")
 	flag.Parse()
 
 	hostKey, hostKeyPath, err := loadOrCreateHostKey()
@@ -912,10 +1190,19 @@ func main() {
 		}
 	}
 
-	hub := newWebHub(*password)
-	if _, err := hub.createShell(0, 0, 80, 24); err != nil {
-		log.Printf("failed to create initial web shell: %v", err)
+	home, herr := os.UserHomeDir()
+	if herr != nil {
+		home = os.Getenv("HOME")
 	}
+	persistDir := filepath.Join(home, ".sshit", strconv.Itoa(*port))
+
+	hub := newWebHub(*password, persistDir, *persist, *persistHistory)
+	if !hub.restore() {
+		if _, err := hub.createShell(0, 0, 80, 24, 760, 420, 0, "", nil); err != nil {
+			log.Printf("failed to create initial web shell: %v", err)
+		}
+	}
+	go hub.snapshotLoop(2 * time.Second)
 
 	httpHandler, err := newHTTPHandler(hub)
 	if err != nil {

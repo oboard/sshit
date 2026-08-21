@@ -7,9 +7,9 @@
     MarkdownEditor = (await import("$lib/ui/MarkdownEditor.svelte")).default;
   });
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
-  import type { EditorWindowState } from "$lib/editorWindows";
+  import type { WindowState } from "$lib/protocol";
 
-  export let windowState: EditorWindowState;
+  export let windowState: WindowState;
   export let zIndex = 1;
   export let focused = false;
 
@@ -44,7 +44,7 @@
 >
   <div class="overflow-hidden" style="width: {windowState.width}px; height: {windowState.height}px;">
     {#if MarkdownEditor}
-      <MarkdownEditor docId={windowState.docId} />
+      <MarkdownEditor docId={windowState.docId ?? `doc-${windowState.id}`} />
     {:else}
       <div class="grid h-full place-items-center text-sm text-zinc-400">Loading editor…</div>
     {/if}

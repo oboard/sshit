@@ -85,6 +85,31 @@ sshit -p 2022
 ssh -p 2022 user@server.example
 ```
 
+### 会话持久化（重启还原）
+
+默认情况下，sshit 会把 Web 工作区持久化到 `~/.sshit/<port>/`，并在服务（或电脑）重启后还原。还原的窗口会保持原有的位置、尺寸和叠放层级。
+
+```bash
+# 默认：布局 + AI Agent 恢复已开启
+sshit
+
+# 同时在重启后回放终端滚动历史（见下方安全提示）
+sshit --persist-history
+
+# 完全关闭持久化
+sshit --persist=false
+```
+
+重启后会还原的内容：
+
+- **窗口布局**——每个终端和编辑器窗口的位置、尺寸与 z 序；
+- **AI Agent 会话**——运行了受支持 Agent（`claude`、`codex`）的终端会用其恢复命令重新拉起（例如 `claude --resume <id>`），让对话从中断处继续；
+- **终端历史**——开启 `--persist-history` 后，每个窗格会回放之前的屏幕内容。普通 shell 进程本身不恢复，窗格会在保存的工作目录中以新 shell 重新打开。
+
+状态写入 `~/.sshit/<port>/session.json`（布局）与 `~/.sshit/<port>/history/<id>.txt`（滚动历史，仅开启 `--persist-history` 时）。
+
+> **安全提示：** 终端历史可能包含密码、令牌和命令输出。请把 `~/.sshit/` 视同 shell 历史对待——文件以 `0700`/`0600` 权限写入，且 `--persist-history` 默认关闭。
+
 ### 在 Web 工作区协作
 
 在浏览器中，你可以：

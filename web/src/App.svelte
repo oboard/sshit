@@ -15,8 +15,7 @@
   import { CollabConnection, type CollabStatus } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
-  import type { WsUser } from "$lib/protocol";
-  import type { EditorWindowState } from "$lib/editorWindows";
+  import type { WsUser, WindowState, WindowPatch } from "$lib/protocol";
   import {
     drawingShapes,
     type DrawingAnchor,
@@ -24,7 +23,7 @@
   } from "$lib/yjsStore";
 
   import { arrangeNewTerminal } from "./arrange";
-  import WebTerm, { type Shell } from "./WebTerm.svelte";
+  import WebTerm from "./WebTerm.svelte";
 
   type ServerUser = {
     id: number;
@@ -48,13 +47,10 @@
     data?: string;
     password?: string;
     users?: ServerUser[];
-    shells?: Shell[];
+    windows?: WindowState[];
     user?: ServerUser;
-    shell?: Shell;
-    editorWindows?: EditorWindowState[];
-    editorWindow?: EditorWindowState;
     windowId?: number;
-    patch?: Partial<EditorWindowState>;
+    patch?: WindowPatch;
   };
 
   let fabricEl: HTMLDivElement;
@@ -67,16 +63,13 @@
   let authError = "";
   let clientID = 0;
   let users: ServerUser[] = [];
-  let shells: Shell[] = [];
+  let windows: WindowState[] = [];
   let termRefs: Record<number, WebTerm> = {};
   let outputs: Record<number, string> = {};
-  let zOrder: Record<number, number> = {};
   let topZ = 1;
   let settingsOpen = false;
   let showNetworkInfo = false;
-  let editorWindows: EditorWindowState[] = [];
-  let focusedShellID = -1;
-  let focusedEditorWindowID = -1;
+  let focusedWindowID = -1;
   const drawingColors = [
     { value: "#f472b6", name: "Pink" },
     { value: "#a78bfa", name: "Purple" },
@@ -112,15 +105,14 @@
   let panStart = [0, 0];
   let panOrigin = [0, 0];
 
-  type ResizeTarget = { kind: "shell" | "collab"; id: number } | null;
-
-  let movingShellID = -1;
-  let movingEditorWindowID = -1;
+  let movingWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
-  let resizeTarget: ResizeTarget = null;
+  let resizingWindowID = -1;
   let resizingStart = [0, 0];
   let resizingOrigin = [0, 0];
+
+  $: shellWindows = windows.filter((w) => w.kind === "shell");
 
   $: usersForUI = users.map((user) => [
     user.id,
@@ -135,24 +127,12 @@
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
 
-  function setEditorWindows(windows: EditorWindowState[]) {
-    editorWindows = [...windows].sort((a, b) => a.id - b.id);
-    const highestSharedZ = editorWindows.reduce((max, window) => Math.max(max, window.zIndex || 1), 1);
-    if (highestSharedZ > topZ) topZ = highestSharedZ;
+  function windowById(id: number) {
+    return windows.find((w) => w.id === id);
   }
 
-  function upsertEditorWindow(window: EditorWindowState) {
-    setEditorWindows([...editorWindows.filter((item) => item.id !== window.id), window]);
-  }
-
-  function patchEditorWindowLocal(id: number, patch: Partial<EditorWindowState>) {
-    const current = editorWindows.find((item) => item.id === id);
-    if (!current) return;
-    upsertEditorWindow({ ...current, ...patch });
-  }
-
-  function removeEditorWindow(id: number) {
-    editorWindows = editorWindows.filter((item) => item.id !== id);
+  function isShell(id: number) {
+    return windowById(id)?.kind === "shell";
   }
 
   function refreshShapes() {
@@ -182,15 +162,18 @@
 
   function applyState(message: Message) {
     if (message.users !== undefined) users = message.users;
-    if (message.shells !== undefined) {
-      const previousShellCount = shells.length;
-      const localShells = new Map(shells.map((shell) => [shell.id, shell]));
-      shells = message.shells.map((incoming) => {
-        const local = localShells.get(incoming.id);
-        if (local && incoming.id === movingShellID) {
+    if (message.windows !== undefined) {
+      const previousCount = windows.length;
+      const localById = new Map(windows.map((w) => [w.id, w]));
+      windows = message.windows.map((incoming) => {
+        topZ = Math.max(topZ, incoming.zIndex || 1);
+        const local = localById.get(incoming.id);
+        if (!local) return incoming;
+        // Preserve in-flight local geometry while dragging/resizing.
+        if (incoming.id === movingWindowID) {
           return { ...incoming, x: local.x, y: local.y };
         }
-        if (local && resizeTarget?.kind === "shell" && incoming.id === resizeTarget.id) {
+        if (incoming.id === resizingWindowID) {
           return {
             ...incoming,
             width: local.width,
@@ -201,26 +184,25 @@
         }
         return incoming;
       });
+
       const nextOutputs = { ...outputs };
-      for (const shell of message.shells) {
-        zOrder[shell.id] ??= ++topZ;
-        if (shell.buffer !== undefined) {
-          nextOutputs[shell.id] = shell.buffer;
+      for (const w of message.windows) {
+        if (w.kind === "shell" && w.buffer !== undefined) {
+          nextOutputs[w.id] = w.buffer;
         }
       }
       for (const id of Object.keys(nextOutputs)) {
-        if (!shells.some((shell) => shell.id === Number(id))) {
+        if (!windows.some((w) => w.id === Number(id) && w.kind === "shell")) {
           delete nextOutputs[Number(id)];
         }
       }
       outputs = nextOutputs;
-      zOrder = zOrder;
-      if (previousShellCount === 0 && shells.length === 1) {
-        const shell = shells[0];
-        requestAnimationFrame(() => moveCanvasTo(shell.x, shell.y, 1));
+
+      if (previousCount === 0 && windows.length >= 1) {
+        const target = windows.find((w) => w.kind === "shell") ?? windows[0];
+        requestAnimationFrame(() => moveCanvasTo(target.x, target.y, 1));
       }
     }
-    if (message.editorWindows !== undefined) setEditorWindows(message.editorWindows);
   }
 
   function connect() {
@@ -270,12 +252,6 @@
         users = [...users.filter((user) => user.id !== message.user!.id), message.user];
       } else if (message.type === "output" && message.id && message.data !== undefined) {
         outputs = { ...outputs, [message.id]: (outputs[message.id] ?? "") + message.data };
-      } else if (message.type === "editorWindowCreated" && message.editorWindow) {
-        upsertEditorWindow(message.editorWindow);
-      } else if (message.type === "editorWindowPatched" && message.windowId !== undefined && message.patch) {
-        patchEditorWindowLocal(message.windowId, message.patch);
-      } else if (message.type === "editorWindowClosed" && message.windowId !== undefined) {
-        removeEditorWindow(message.windowId);
       }
     };
 
@@ -305,28 +281,20 @@
   }
 
   function anchorOrigin(anchor: DrawingAnchor): [number, number] {
-    if (anchor.kind === "editorWindow") {
-      const window = editorWindows.find((item) => item.id === anchor.id);
-      return [window?.x ?? 0, window?.y ?? 0];
-    }
-    if (anchor.kind === "shell") {
-      const shell = shells.find((item) => item.id === anchor.id);
-      return [shell?.x ?? 0, shell?.y ?? 0];
+    if (anchor.kind === "editorWindow" || anchor.kind === "shell") {
+      const win = windowById(anchor.id);
+      return [win?.x ?? 0, win?.y ?? 0];
     }
     return [0, 0];
   }
 
   function drawingAnchorAt(x: number, y: number): DrawingAnchor {
-    const collabHit = [...editorWindows]
+    const hit = [...windows]
       .sort((a, b) => (b.zIndex ?? 1) - (a.zIndex ?? 1))
-      .find((window) => x >= window.x && x <= window.x + window.width && y >= window.y && y <= window.y + window.height);
-    if (collabHit) return { kind: "editorWindow", id: collabHit.id };
-
-    const shellHit = [...shells]
-      .sort((a, b) => (zOrder[b.id] ?? 1) - (zOrder[a.id] ?? 1))
-      .find((shell) => x >= shell.x && x <= shell.x + (shell.width || 760) && y >= shell.y && y <= shell.y + (shell.height || 420) + 42);
-    if (shellHit) return { kind: "shell", id: shellHit.id };
-
+      .find((w) => x >= w.x && x <= w.x + w.width && y >= w.y && y <= w.y + w.height + 42);
+    if (hit) {
+      return hit.kind === "editor" ? { kind: "editorWindow", id: hit.id } : { kind: "shell", id: hit.id };
+    }
     return { kind: "world" };
   }
 
@@ -376,108 +344,52 @@
   }
 
   function existingWindows() {
-    return [
-      ...shells.map((shell) => ({
-        x: shell.x,
-        y: shell.y,
-        width: shell.width || 760,
-        height: shell.height || 420,
-      })),
-      ...editorWindows.map((window) => ({
-        x: window.x,
-        y: window.y,
-        width: window.width,
-        height: window.height,
-      })),
-    ];
+    return windows.map((w) => ({
+      x: w.x,
+      y: w.y,
+      width: w.width,
+      height: w.height,
+    }));
   }
 
   function createShell() {
-    const existing = existingWindows();
-    const { x, y } = arrangeNewTerminal(existing);
-    send({
-      type: "create",
-      x,
-      y,
-      cols: 80,
-      rows: 24,
-    });
+    const { x, y } = arrangeNewTerminal(existingWindows());
+    send({ type: "create", kind: "shell", x, y, cols: 80, rows: 24, width: 760, height: 420 });
     moveCanvasTo(x, y, 1);
   }
 
   function createEditorWindow() {
-    const width = 980;
-    const height = 620;
     const { x, y } = arrangeNewTerminal(existingWindows());
-    const id = Date.now() * 1000 + clientID;
-    const zIndex = ++topZ;
-    const window: EditorWindowState = { id, docId: `doc-${id.toString(36)}`, kind: "editor", x, y, width, height, zIndex };
-    send({ type: "editorWindowCreate", editorWindow: window });
-    upsertEditorWindow(window);
+    send({ type: "create", kind: "editor", x, y, width: 980, height: 620 });
     moveCanvasTo(x, y, 1);
   }
 
-  function focusShell(id: number) {
-    focusedShellID = id;
-    focusedEditorWindowID = -1;
-    zOrder[id] = ++topZ;
-    zOrder = zOrder;
+  function focusWindow(id: number) {
+    focusedWindowID = id;
+    send({ type: "patch", id, patch: { zIndex: ++topZ } });
   }
 
-  function focusEditorWindow(id: number) {
-    focusedShellID = -1;
-    focusedEditorWindowID = id;
-    const zIndex = ++topZ;
-    send({ type: "editorWindowPatch", windowId: id, patch: { zIndex } });
-    patchEditorWindowLocal(id, { zIndex });
-  }
-
-  function closeEditorWindow(id: number) {
-    if (focusedEditorWindowID === id) focusedEditorWindowID = -1;
-    send({ type: "editorWindowClose", windowId: id });
-    removeEditorWindow(id);
+  function closeWindow(id: number) {
+    if (focusedWindowID === id) focusedWindowID = -1;
+    send({ type: "close", id });
   }
 
   function startMove(id: number, event: MouseEvent) {
     event.preventDefault();
-    focusShell(id);
-    const shell = shells.find((shell) => shell.id === id);
-    if (!shell) return;
-    movingShellID = id;
-    movingEditorWindowID = -1;
+    focusWindow(id);
+    const win = windowById(id);
+    if (!win) return;
+    movingWindowID = id;
     movingStart = [event.clientX, event.clientY];
-    movingOrigin = [shell.x, shell.y];
-  }
-
-  function startEditorWindowMove(id: number, event: MouseEvent) {
-    event.preventDefault();
-    focusEditorWindow(id);
-    const window = editorWindows.find((window) => window.id === id);
-    if (!window) return;
-    movingEditorWindowID = id;
-    movingShellID = -1;
-    movingStart = [event.clientX, event.clientY];
-    movingOrigin = [window.x, window.y];
-  }
-
-  function startWindowResize(target: Exclude<ResizeTarget, null>, event: MouseEvent, width: number, height: number) {
-    event.preventDefault();
-    if (target.kind === "shell") {
-      focusShell(target.id);
-    } else {
-      focusEditorWindow(target.id);
-    }
-    resizeTarget = target;
-    resizingStart = [event.clientX, event.clientY];
-    resizingOrigin = [width, height];
+    movingOrigin = [win.x, win.y];
   }
 
   function startResize(id: number, event: MouseEvent, width: number, height: number) {
-    startWindowResize({ kind: "shell", id }, event, width, height);
-  }
-
-  function startEditorWindowResize(id: number, event: MouseEvent, width: number, height: number) {
-    startWindowResize({ kind: "collab", id }, event, width, height);
+    event.preventDefault();
+    focusWindow(id);
+    resizingWindowID = id;
+    resizingStart = [event.clientX, event.clientY];
+    resizingOrigin = [width, height];
   }
 
   function startPan(event: MouseEvent) {
@@ -486,8 +398,7 @@
     const target = event.target as HTMLElement;
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
-    focusedShellID = -1;
-    focusedEditorWindowID = -1;
+    focusedWindowID = -1;
     panning = true;
     panStart = [event.clientX, event.clientY];
     panOrigin = [viewportX, viewportY];
@@ -606,67 +517,53 @@
       return;
     }
 
-    if (resizeTarget) {
-      const minWidth = resizeTarget.kind === "shell" ? 320 : 520;
-      const minHeight = resizeTarget.kind === "shell" ? 180 : 360;
+    if (resizingWindowID !== -1) {
+      const minWidth = isShell(resizingWindowID) ? 320 : 520;
+      const minHeight = isShell(resizingWindowID) ? 180 : 360;
       const width = Math.max(minWidth, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
       const height = Math.max(minHeight, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
-      if (resizeTarget.kind === "shell") {
-        shells = shells.map((shell) => {
-          if (shell.id !== resizeTarget?.id) return shell;
-          const next = { ...shell, width, height };
-          const fitted = termRefs[shell.id]?.fitSize();
+      windows = windows.map((w) => {
+        if (w.id !== resizingWindowID) return w;
+        const next = { ...w, width, height };
+        if (w.kind === "shell") {
+          const fitted = termRefs[w.id]?.fitSize();
           if (fitted) {
             next.cols = fitted.cols;
             next.rows = fitted.rows;
           }
-          return next;
-        });
-      } else {
-        send({ type: "editorWindowPatch", windowId: resizeTarget.id, patch: { width, height } });
-        patchEditorWindowLocal(resizeTarget.id, { width, height });
-      }
+        }
+        return next;
+      });
       return;
     }
 
-    if (movingShellID !== -1) {
+    if (movingWindowID !== -1) {
       const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
       const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
-      shells = shells.map((shell) =>
-        shell.id === movingShellID ? { ...shell, x, y } : shell,
-      );
+      windows = windows.map((w) => (w.id === movingWindowID ? { ...w, x, y } : w));
       return;
-    }
-
-    if (movingEditorWindowID !== -1) {
-      const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
-      const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
-      send({ type: "editorWindowPatch", windowId: movingEditorWindowID, patch: { x, y } });
-      patchEditorWindowLocal(movingEditorWindowID, { x, y });
     }
   }
 
   function stopMove() {
     panning = false;
-    if (resizeTarget) {
-      if (resizeTarget.kind === "shell") {
-        const shell = shells.find((shell) => shell.id === resizeTarget?.id);
-        if (shell) {
-          const fitted = termRefs[shell.id]?.fitSize();
-          const cols = fitted?.cols ?? shell.cols;
-          const rows = fitted?.rows ?? shell.rows;
-          send({ type: "resize", id: shell.id, width: shell.width, height: shell.height, cols, rows });
+    if (resizingWindowID !== -1) {
+      const win = windowById(resizingWindowID);
+      if (win) {
+        const patch: WindowPatch = { width: win.width, height: win.height };
+        if (win.kind === "shell") {
+          const fitted = termRefs[win.id]?.fitSize();
+          patch.cols = fitted?.cols ?? win.cols;
+          patch.rows = fitted?.rows ?? win.rows;
         }
+        send({ type: "patch", id: win.id, patch });
       }
-      resizeTarget = null;
+      resizingWindowID = -1;
     }
-    if (movingShellID !== -1) {
-      const shell = shells.find((shell) => shell.id === movingShellID);
-      if (shell) send({ type: "move", id: shell.id, x: shell.x, y: shell.y });
-      movingShellID = -1;
-    }
-    if (movingEditorWindowID !== -1) {
-      movingEditorWindowID = -1;
+    if (movingWindowID !== -1) {
+      const win = windowById(movingWindowID);
+      if (win) send({ type: "patch", id: win.id, patch: { x: win.x, y: win.y } });
+      movingWindowID = -1;
     }
   }
 
@@ -754,36 +651,36 @@
     <div class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-300">zoom {Math.round(zoom * 100)}%</div>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
-    {#each editorWindows as windowState (windowState.id)}
-      <EditorWindow
-        {windowState}
-        zIndex={windowState.zIndex ?? 1}
-        focused={focusedEditorWindowID === windowState.id}
-        on:focus={(event) => focusEditorWindow(event.detail.id)}
-        on:startMove={(event) => startEditorWindowMove(event.detail.id, event.detail.event)}
-        on:startResize={(event) => startEditorWindowResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
-        on:close={(event) => closeEditorWindow(event.detail.id)}
-      />
-    {/each}
-
-    {#each shells as shell (shell.id)}
-      <WebTerm
-        bind:this={termRefs[shell.id]}
-        {shell}
-        output={outputs[shell.id] ?? ""}
-        zIndex={zOrder[shell.id] ?? 1}
-        focused={focusedShellID === shell.id}
-        on:focus={(event) => focusShell(event.detail.id)}
-        on:blur={() => { focusedShellID = -1; }}
-        on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
-        on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
-        on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
-        on:resize={(event) => {
-          shells = shells.map((shell) => shell.id === event.detail.id ? { ...shell, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } : shell);
-          send({ type: "resize", id: event.detail.id, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height });
-        }}
-        on:close={(event) => send({ type: "close", id: event.detail.id })}
-      />
+    {#each windows as windowState (windowState.id)}
+      {#if windowState.kind === "shell"}
+        <WebTerm
+          bind:this={termRefs[windowState.id]}
+          shell={windowState}
+          output={outputs[windowState.id] ?? ""}
+          zIndex={windowState.zIndex ?? 1}
+          focused={focusedWindowID === windowState.id}
+          on:focus={(event) => focusWindow(event.detail.id)}
+          on:blur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
+          on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
+          on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
+          on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
+          on:resize={(event) => {
+            windows = windows.map((w) => w.id === event.detail.id ? { ...w, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } : w);
+            send({ type: "patch", id: event.detail.id, patch: { cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } });
+          }}
+          on:close={(event) => closeWindow(event.detail.id)}
+        />
+      {:else}
+        <EditorWindow
+          {windowState}
+          zIndex={windowState.zIndex ?? 1}
+          focused={focusedWindowID === windowState.id}
+          on:focus={(event) => focusWindow(event.detail.id)}
+          on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
+          on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
+          on:close={(event) => closeWindow(event.detail.id)}
+        />
+      {/if}
     {/each}
 
     {#each otherUsersForUI as [id, user] (id)}
@@ -874,7 +771,7 @@
           <span class="text-xs font-medium text-zinc-400">Size</span>
           <div class="flex rounded-lg bg-zinc-900 p-1 ring-1 ring-white/10">
             {#each drawingWidths as width (width.value)}
-              <button type="button" class="grid h-7 w-9 place-items-center rounded-md transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" class:bg-indigo-500={drawingStrokeWidth === width.value} aria-label={`${width.name} stroke`} aria-pressed={drawingStrokeWidth === width.value} title={width.name} on:click={() => (drawingStrokeWidth = width.value)}>
+              <button type="button" class="grid h-7 w-9 place-items-center rounded-md transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" class:bg-indigo-500={width.value} aria-label={`${width.name} stroke`} aria-pressed={drawingStrokeWidth === width.value} title={width.name} on:click={() => (drawingStrokeWidth = width.value)}>
                 <span class="rounded-full bg-white" style={`width: ${Math.max(5, width.value * 2)}px; height: ${Math.max(5, width.value * 2)}px`}></span>
               </button>
             {/each}

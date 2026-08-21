@@ -6,17 +6,9 @@
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import { settings } from "$lib/settings";
   import themes from "$lib/ui/themes";
+  import type { WindowState } from "$lib/protocol";
 
-  export type Shell = {
-    id: number;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    cols: number;
-    rows: number;
-    buffer?: string;
-  };
+  export type Shell = WindowState;
 
   export let shell: Shell;
   export let zIndex = 1;
