@@ -661,6 +661,14 @@ func (h *webHub) restore() bool {
 		return false
 	}
 
+	// Reload the collaborative document (markdown content and drawings) so
+	// editor windows come back with their contents, not just their frames.
+	if updates, err := persist.LoadCollab(h.persistDir); err != nil {
+		log.Printf("failed to load collab state: %v", err)
+	} else if len(updates) > 0 {
+		h.collabUpdates = updates
+	}
+
 	restored := false
 	for _, saved := range snap.Windows {
 		switch saved.Kind {
@@ -792,6 +800,10 @@ func (h *webHub) snapshot() error {
 	h.dirty = false
 
 	snap := &persist.Snapshot{IDSeq: h.idSeq, Windows: make([]persist.Window, 0, len(h.windows))}
+	collabUpdates := make([][]byte, len(h.collabUpdates))
+	for i, u := range h.collabUpdates {
+		collabUpdates[i] = append([]byte(nil), u...)
+	}
 	type historyWrite struct {
 		id   int64
 		data []byte
@@ -825,6 +837,9 @@ func (h *webHub) snapshot() error {
 	h.refreshAgents()
 
 	if err := persist.Write(h.persistDir, snap); err != nil {
+		return err
+	}
+	if err := persist.WriteCollab(h.persistDir, collabUpdates); err != nil {
 		return err
 	}
 	for _, hw := range histories {
@@ -957,6 +972,7 @@ func (h *webHub) broadcastCollabUpdate(sender *collabClient, update []byte) {
 	h.mu.Lock()
 	stored := append([]byte(nil), update...)
 	h.collabUpdates = append(h.collabUpdates, stored)
+	h.dirty = true
 	for client := range h.collabClients {
 		if client == sender {
 			continue

@@ -62,6 +62,8 @@ const snapshotVersion = 1
 
 func sessionPath(dir string) string { return filepath.Join(dir, "session.json") }
 
+func collabPath(dir string) string { return filepath.Join(dir, "collab.json") }
+
 func historyDir(dir string) string { return filepath.Join(dir, "history") }
 
 func historyPath(dir string, id int64) string {
@@ -157,4 +159,39 @@ func PruneHistory(dir string, keep map[int64]bool) error {
 		}
 	}
 	return nil
+}
+
+// WriteCollab atomically persists the collaborative document's update log.
+// Updates are raw Yjs update payloads; encoding/json renders each []byte as
+// base64, which keeps the file self-describing and diff-friendly.
+func WriteCollab(dir string, updates [][]byte) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(updates)
+	if err != nil {
+		return err
+	}
+	tmp := collabPath(dir) + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, collabPath(dir))
+}
+
+// LoadCollab reads the persisted collaborative update log. A missing file is
+// not an error: it returns nil.
+func LoadCollab(dir string) ([][]byte, error) {
+	data, err := os.ReadFile(collabPath(dir))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var updates [][]byte
+	if err := json.Unmarshal(data, &updates); err != nil {
+		return nil, fmt.Errorf("parse collab log: %w", err)
+	}
+	return updates, nil
 }

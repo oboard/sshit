@@ -104,9 +104,10 @@ What is restored:
 
 - **Window layout** — every terminal and editor window's position, size, and z-order.
 - **Terminal history** — each pane replays its previous screen contents. Plain shells reopen as fresh shells in their saved working directory; the underlying processes are not preserved.
+- **Editor & drawing content** — Markdown documents and canvas drawings live in a shared CRDT document whose update log is persisted, so editor windows come back with their contents.
 - **AI agent sessions** — terminals running a supported agent (`claude`, `codex`) are relaunched with their resume command (for example `claude --resume <id>`), so the conversation continues where it left off.
 
-State is written to `~/.sshit/<port>/session.json` (layout) and `~/.sshit/<port>/history/<id>.txt` (scrollback). If history files exist from a previous run they are always replayed on restore — `--persist-history` only controls whether new output keeps being written.
+State is written to `~/.sshit/<port>/session.json` (layout), `~/.sshit/<port>/history/<id>.txt` (scrollback), and `~/.sshit/<port>/collab.json` (collaborative document). If history files exist from a previous run they are always replayed on restore — `--persist-history` only controls whether new output keeps being written.
 
 > **Security note:** terminal scrollback can contain passwords, tokens, and command output. Treat `~/.sshit/` like your shell history — it is written with `0700`/`0600` permissions. Use `--persist-history=false` on shared machines.
 

@@ -104,9 +104,10 @@ sshit --persist=false
 
 - **窗口布局**——每个终端和编辑器窗口的位置、尺寸与 z 序；
 - **终端历史**——每个窗格回放之前的屏幕内容。普通 shell 进程本身不恢复，窗格会在保存的工作目录中以新 shell 重新打开；
+- **编辑器与画布内容**——Markdown 文档和画布涂鸦保存在共享 CRDT 文档中，其更新日志会持久化，编辑器窗口恢复时内容一并还原；
 - **AI Agent 会话**——运行了受支持 Agent（`claude`、`codex`）的终端会用其恢复命令重新拉起（例如 `claude --resume <id>`），让对话从中断处继续。
 
-状态写入 `~/.sshit/<port>/session.json`（布局）与 `~/.sshit/<port>/history/<id>.txt`（滚动历史）。只要存在历史文件，恢复时一律回放——`--persist-history` 只控制是否继续写入新输出。
+状态写入 `~/.sshit/<port>/session.json`（布局）、`~/.sshit/<port>/history/<id>.txt`（滚动历史）与 `~/.sshit/<port>/collab.json`（协作文档）。只要存在历史文件，恢复时一律回放——`--persist-history` 只控制是否继续写入新输出。
 
 > **安全提示：** 终端历史可能包含密码、令牌和命令输出。请把 `~/.sshit/` 视同 shell 历史对待——文件以 `0700`/`0600` 权限写入。在共享机器上可用 `--persist-history=false` 关闭。
 
