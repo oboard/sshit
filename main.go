@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -329,8 +330,24 @@ type webClient struct {
 	authenticated bool
 	conn          *websocket.Conn
 	send          chan wsEnvelope
+	out           chan wsBinOut
 	hub           *webHub
 }
+
+// wsBinOut carries one terminal-output payload destined for a single client.
+// Channeling raw bytes lets the hot path skip JSON marshaling and parse costs.
+type wsBinOut struct {
+	id   int64
+	data []byte
+}
+
+// WebSocket binary frame layout (big-endian, versioned for future message
+// types such as image output):
+//
+//	offset 0            : byte   version/category (1 = terminal output)
+//	offset 1..8         : int64  window id
+//	offset 9..          : payload bytes
+const wsBurstCode = uint8(1)
 
 type collabMessage struct {
 	messageType int
@@ -384,7 +401,12 @@ func newWebHub(password, persistDir string, persistEnabled, saveHistory bool) *w
 
 // snapshotLocked returns the user list and all windows sorted by ID. The
 // caller must hold h.mu.
-func (h *webHub) snapshotLocked() (users []webUser, windows []windowState) {
+//
+// Terminal scrollback is only attached when includeBuffers is true — used for
+// the one-time `hello` handshake a fresh client needs in order to replay the
+// screen. Routine `state` broadcasts omit it: re-serializing up to 1 MiB of
+// scrollback on every create/move/resize would otherwise flood the socket.
+func (h *webHub) snapshotLocked(includeBuffers bool) (users []webUser, windows []windowState) {
 	users = make([]webUser, 0, len(h.clients))
 	windows = make([]windowState, 0, len(h.windows))
 	for _, c := range h.clients {
@@ -392,7 +414,7 @@ func (h *webHub) snapshotLocked() (users []webUser, windows []windowState) {
 	}
 	for _, w := range h.windows {
 		state := w.windowState
-		if w.Kind == persist.KindShell {
+		if includeBuffers && w.Kind == persist.KindShell {
 			state.Buffer = string(w.buffer)
 		}
 		windows = append(windows, state)
@@ -418,9 +440,26 @@ func (h *webHub) broadcast(msg wsEnvelope) {
 	}
 }
 
+// broadcastOut fans one terminal-output payload out to every connected client
+// as a binary frame, dropping any blocked reader rather than stalling the PTY.
+func (h *webHub) broadcastOut(id int64, payload []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.clients {
+		select {
+		case c.out <- wsBinOut{id: id, data: payload}:
+		default:
+		}
+	}
+}
+
 func (h *webHub) broadcastState() {
 	h.mu.Lock()
-	users, windows := h.snapshotLocked()
+	// Routine state updates carry geometry/z-order/user list only. Terminal
+	// scrollback is handled by the one-time `hello` handshake; including it
+	// here on every create/move/resize would re-ship the full buffer to every
+	// client repeatedly.
+	users, windows := h.snapshotLocked(false)
 	h.mu.Unlock()
 	h.broadcast(wsEnvelope{Type: "state", Users: users, Windows: windows})
 }
@@ -434,12 +473,13 @@ func (h *webHub) addClient(conn *websocket.Conn) *webClient {
 		authenticated: h.password == "",
 		conn:          conn,
 		send:          make(chan wsEnvelope, 64),
+		out:           make(chan wsBinOut, 64),
 		hub:           h,
 	}
 	if client.authenticated {
 		h.clients[client.id] = client
 	}
-	users, windows := h.snapshotLocked()
+	users, windows := h.snapshotLocked(true)
 	h.mu.Unlock()
 	if client.authenticated {
 		client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows}
@@ -456,6 +496,7 @@ func (h *webHub) removeClient(id int) {
 	if c, ok := h.clients[id]; ok {
 		delete(h.clients, id)
 		close(c.send)
+		close(c.out)
 		removed = true
 	}
 	h.mu.Unlock()
@@ -529,7 +570,12 @@ func (h *webHub) readShell(win *webWindow) {
 	for {
 		n, err := win.pty.Read(buf)
 		if n > 0 {
+			// Take one copy: it feeds both the scrollback buffer (shared under
+			// the hub lock) and the client fan-out. Because every client's
+			// writer goroutine reads the same chunk concurrently, it must stay
+			// immutable — never reuse the live pty read buffer after `Read`.
 			chunk := append([]byte(nil), buf[:n]...)
+			// Buffer a copy for scrollback under the lock.
 			h.mu.Lock()
 			win.buffer = append(win.buffer, chunk...)
 			if len(win.buffer) > 1<<20 {
@@ -537,7 +583,9 @@ func (h *webHub) readShell(win *webWindow) {
 			}
 			h.dirty = true
 			h.mu.Unlock()
-			h.broadcast(wsEnvelope{Type: "output", ID: win.ID, Data: string(chunk)})
+			// Send the raw bytes straight to clients as a binary frame,
+			// skipping JSON marshaling (escaping/quotes) entirely.
+			h.broadcastOut(win.ID, chunk)
 		}
 		if err != nil {
 			h.closeWindow(win.ID)
@@ -906,6 +954,23 @@ func (h *webHub) refreshAgents() {
 
 var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+
+	// Enable permessage-deflate so the socket negotiates per-message
+	// compression with browsers that support it. Terminal sessions frequently
+	// emit repeated whitespace/clear patterns, which compress extremely well;
+	// the average latency/bandwidth win on slower links is large.
+	EnableCompression: true,
+}
+
+// encodeBinOut frames one terminal-output payload as a WebSocket binary
+// message. Layout: [version byte][int64 window id big-endian][payload bytes].
+// Keeping output on binary frames skips JSON escaping/quotes on the hot path.
+func encodeBinOut(id int64, payload []byte) []byte {
+	buf := make([]byte, 9+len(payload))
+	buf[0] = wsBurstCode
+	binary.BigEndian.PutUint64(buf[1:], uint64(id))
+	copy(buf[9:], payload)
+	return buf
 }
 
 func (h *webHub) sendCollabJSON(client *collabClient, message wsEnvelope) bool {
@@ -1109,9 +1174,27 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 		defer hub.removeClient(client.id)
 
 		go func() {
-			for msg := range client.send {
-				if err := conn.WriteJSON(msg); err != nil {
-					return
+			// One writer goroutine for both channels keeps frames ordered.
+			// Select drains control (JSON) and terminal output (binary) fairly;
+			// if `out` is full, we drop the oldest buffer so a slow client can
+			// never stall a busy PTY. The client re-syncs via the next
+			// "hello"/scrollback replay.
+			for {
+				select {
+				case msg, ok := <-client.send:
+					if !ok {
+						return
+					}
+					if err := conn.WriteJSON(msg); err != nil {
+						return
+					}
+				case out, ok := <-client.out:
+					if !ok {
+						return
+					}
+					if err := conn.WriteMessage(websocket.BinaryMessage, encodeBinOut(out.id, out.data)); err != nil {
+						return
+					}
 				}
 			}
 		}()
@@ -1133,7 +1216,7 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					client.authenticated = true
 					hub.clients[client.id] = client
 				}
-				users, windows := hub.snapshotLocked()
+				users, windows := hub.snapshotLocked(true)
 				hub.mu.Unlock()
 				client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows}
 				hub.broadcastState()

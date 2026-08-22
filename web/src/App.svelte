@@ -117,6 +117,9 @@
   let tapCandidate: { id: number; x: number; y: number; time: number; moved: boolean } | null = null;
   let lastTap = { time: 0, x: 0, y: 0 };
 
+  // Reused across every binary frame: terminal output is high-frequency, so
+  // creating a new TextDecoder per message would add avoidable allocation.
+  const binDecoder = new TextDecoder();
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 2.5;
   const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
@@ -225,6 +228,9 @@
   function connect() {
     socket?.close();
     socket = new WebSocket(wsURL());
+    // Output arrives as raw binary frames to cut JSON overhead; reading as
+    // ArrayBuffer keeps decoding cheap (no Blob async round-trip).
+    socket.binaryType = "arraybuffer";
 
     socket.onopen = () => {
       serverLatency = null;
@@ -232,6 +238,25 @@
     };
 
     socket.onmessage = (event) => {
+      // Binary frames carry terminal output for a specific shell window:
+      // [version][window id (int64 BE)][raw bytes]. JSON text frames are the
+      // control plane (auth/state/hello/…). Separation means the hot path
+      // never has to JSON-escape or parse terminal data.
+      if (typeof event.data !== "string") {
+        const d = new DataView(event.data);
+        if (d.byteLength >= 9 && d.getUint8(0) === 1) {
+          const wid = d.getBigInt64(1, false);
+          if (wid >= 0n) {
+            const bytes = new Uint8Array(event.data, 9);
+            const data = binDecoder.decode(bytes);
+            if (wid <= 0x7fffffff) {
+              outputs = { ...outputs, [Number(wid)]: (outputs[Number(wid)] ?? "") + data };
+            }
+          }
+        }
+        return;
+      }
+
       let message: Message;
       try {
         message = JSON.parse(event.data);
