@@ -25,12 +25,22 @@ import (
 	"time"
 
 	"sshit/internal/persist"
+	"sshit/internal/update"
 	"sshit/internal/web"
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 	"github.com/gorilla/websocket"
 	gossh "golang.org/x/crypto/ssh"
+)
+
+// version is injected at build time via -ldflags "-X main.version=..." so that
+// every release binary reports the tag it was built from (see scripts/release).
+var version = "0.0.0-dev"
+
+const (
+	repoOwner = "oboard"
+	repoName  = "sshit"
 )
 
 func defaultShell() string {
@@ -1298,7 +1308,18 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 	return mux, nil
 }
 
+// updateCommand runs `sshit upgrade` and returns its process exit code.
+func updateCommand(args []string) int {
+	return update.Run(version, args)
+}
+
 func main() {
+	// "upgrade" is a CLI subcommand, not a service flag. Handle it before the
+	// flag package gets a chance to treat it (or its flags) as server options.
+	if len(os.Args) > 1 && os.Args[1] == "upgrade" {
+		os.Exit(updateCommand(os.Args[2:]))
+	}
+
 	address := flag.String("address", "0.0.0.0", "address to listen on")
 	flag.StringVar(address, "a", "0.0.0.0", "address to listen on")
 	port := flag.Int("port", 2222, "port to listen on")

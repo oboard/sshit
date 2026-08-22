@@ -48,6 +48,20 @@ curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh \
 
 其他已构建平台的二进制请前往 [GitHub Releases](https://github.com/oboard/sshit/releases) 下载。
 
+### 升级
+
+安装后，`sshit` 可以自行更新到最新发行版，无需重新运行安装脚本。它会下载当前平台的二进制并原子替换正在运行的可执行文件：
+
+```bash
+# 更新到最新发行版
+sshit upgrade
+
+# 仅查看是否有更新，不改动任何文件
+sshit upgrade --check
+```
+
+在 macOS/Linux 上，新二进制会就地替换正在运行的旧版本；在 Windows 上会先把正在运行的 `.exe` 改名避让，然后替换，因此请在更新后重启 `sshit`（或重开终端）以使用新版本。
+
 ### 启动服务
 
 ```bash

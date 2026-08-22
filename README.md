@@ -53,6 +53,20 @@ irm https://sshit.oboard.fun/install.ps1 | iex
 
 Download binaries for other supported platforms from [GitHub Releases](https://github.com/oboard/sshit/releases).
 
+### Upgrade
+
+Once installed, `sshit` can update itself to the latest release without re-running the installer. It downloads the current platform's binary and atomically replaces the running executable:
+
+```bash
+# Update to the latest release
+sshit upgrade
+
+# Only check what version is latest, without changing anything
+sshit upgrade --check
+```
+
+On macOS/Linux the new binary replaces the running one in place. On Windows the running `.exe` is moved aside first, so restart `sshit` (or reopen the terminal) afterwards to start using the new version.
+
 ### Start the Server
 
 ```bash
