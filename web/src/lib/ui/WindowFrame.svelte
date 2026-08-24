@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, onDestroy, tick } from "svelte";
+  import { animate } from "motion";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
   import CircleButtons from "$lib/ui/CircleButtons.svelte";
@@ -15,6 +16,48 @@
   export let background = "#111111";
   export let ariaLabel = title;
   export let resizeLabel = `Resize ${title}`;
+  export let tiled = false;
+  export let layoutAnimating = false;
+
+  let previousTiled = tiled;
+  let chromeVisible = true;
+  let chromeEl: HTMLDivElement;
+  let chromeTimer: number | undefined;
+  let chromeAnimation: { stop: () => void } | undefined;
+
+  async function transitionChrome(nextTiled: boolean) {
+    chromeAnimation?.stop();
+    window.clearTimeout(chromeTimer);
+    chromeVisible = true;
+    await tick();
+    if (!chromeEl) return;
+
+    if (nextTiled) {
+      chromeAnimation = animate(
+        chromeEl,
+        { opacity: [1, 0], height: [42, 0], transform: ["translateY(0)", "translateY(-10px)"] },
+        { duration: 0.48, ease: [0.16, 1, 0.3, 1] },
+      );
+      chromeTimer = window.setTimeout(() => (chromeVisible = false), 480);
+    } else {
+      chromeAnimation = animate(
+        chromeEl,
+        { opacity: [0, 1], height: [0, 42], transform: ["translateY(-10px)", "translateY(0)"] },
+        { duration: 0.48, ease: [0.16, 1, 0.3, 1] },
+      );
+    }
+  }
+
+  // Keep the title bar mounted long enough for Motion to animate it away.
+  $: if (tiled !== previousTiled) {
+    previousTiled = tiled;
+    void transitionChrome(tiled);
+  }
+
+  onDestroy(() => {
+    window.clearTimeout(chromeTimer);
+    chromeAnimation?.stop();
+  });
 
   const dispatch = createEventDispatcher<{
     close: { id: number };
@@ -28,8 +71,12 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
-  class="absolute inline-block select-none rounded-lg border border-zinc-700 opacity-90 shadow-2xl transition-opacity duration-200"
+  class="window-frame absolute inline-block select-none rounded-xl border border-white/10 opacity-90 shadow-2xl transition-[opacity,box-shadow] duration-200"
+  class:tile-animating={layoutAnimating}
+  class:frameless={tiled}
   class:focused
+  class:tiled
+  class:interacting={focused}
   style="transform: translate({x}px, {y}px); z-index: {zIndex}; background: {background};"
   data-no-pan
   role="group"
@@ -37,33 +84,37 @@
   on:pointerdown|stopPropagation={() => dispatch("focus", { id })}
   on:wheel|stopPropagation
 >
-  <!-- touch-action: none keeps the browser from stealing window drags. -->
-  <div
-    class="flex cursor-move select-none items-center"
-    style="touch-action: none;"
-    role="toolbar"
-    tabindex="-1"
-    aria-label="{title} window controls"
-    on:pointerdown|stopPropagation={(event) => dispatch("startMove", { id, event })}
-  >
-    <div class="flex flex-1 items-center px-3">
-      <CircleButtons>
-        <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && dispatch("close", { id })} />
-        <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && dispatch("yellow", { id })} />
-        <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && dispatch("green", { id })} />
-      </CircleButtons>
+  {#if chromeVisible}
+    <!-- touch-action: none keeps the browser from stealing window drags. -->
+    <div
+      bind:this={chromeEl}
+      class="flex cursor-move select-none items-center overflow-hidden"
+      style="touch-action: none;"
+      role="toolbar"
+      tabindex="-1"
+      aria-label="{title} window controls"
+      on:pointerdown|stopPropagation={(event) => { if (!tiled) dispatch("startMove", { id, event }); }}
+    >
+      <div class="flex flex-1 items-center px-3">
+        <CircleButtons>
+          <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && dispatch("close", { id })} />
+          <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && dispatch("yellow", { id })} />
+          <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && dispatch("green", { id })} />
+        </CircleButtons>
+      </div>
+      <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
+        {title}
+      </div>
+      <div class="flex-1"></div>
     </div>
-    <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
-      {title}
-    </div>
-    <div class="flex-1"></div>
-  </div>
+  {/if}
 
   <slot />
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
+    class:invisible={tiled}
     style="touch-action: none;"
     role="separator"
     aria-label={resizeLabel}
@@ -73,9 +124,22 @@
 </div>
 
 <style lang="postcss">
-  .focused {
-    @apply opacity-100 ring-1 ring-indigo-500/50;
+  .window-frame {
+    box-shadow: 0 20px 45px rgb(0 0 0 / 0.28), inset 0 1px rgb(255 255 255 / 0.05);
   }
+
+  .focused {
+    @apply opacity-100 ring-1 ring-cyan-300/70;
+    box-shadow: 0 0 0 1px rgb(34 211 238 / 0.18), 0 22px 54px rgb(0 0 0 / 0.38), 0 0 34px rgb(34 211 238 / 0.1);
+  }
+
+  /* Window coordinates update continuously during a drag. Never transition
+     transform: otherwise each update chases the pointer and feels viscous. */
+  .interacting { transition-property: opacity, box-shadow; }
+  .tiled { @apply rounded-none; }
+  .frameless { border-color: transparent; box-shadow: none; }
+  .tile-animating { transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1); }
+
 
   .resize-handle {
     cursor: se-resize;

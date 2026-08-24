@@ -14,6 +14,8 @@
   export let zIndex = 1;
   export let output = "";
   export let focused = false;
+  export let tiled = false;
+  export let layoutAnimating = false;
 
   const dispatch = createEventDispatcher<{
     input: { id: number; data: string };
@@ -227,6 +229,8 @@
   height={shell.height || termEl?.offsetHeight || 420}
   {zIndex}
   {focused}
+  {tiled}
+  {layoutAnimating}
   background={theme.background}
   ariaLabel={currentTitle}
   resizeLabel="Resize terminal"
@@ -239,6 +243,7 @@
 >
   <div
     class="overflow-hidden px-4 py-2"
+    class:p-0={tiled}
     bind:this={termEl}
     style="width: {shell.width || 760}px; height: {shell.height || 420}px;"
   >

@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -26,7 +25,6 @@ import (
 
 	"sshit/internal/persist"
 	"sshit/internal/update"
-	"sshit/internal/web"
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
@@ -1288,26 +1286,6 @@ func listenAddress(address string, port int) string {
 	return net.JoinHostPort(address, strconv.Itoa(port))
 }
 
-func newHTTPHandler(hub *webHub) (http.Handler, error) {
-	dist, err := fs.Sub(web.Dist, "dist")
-	if err != nil {
-		return nil, err
-	}
-
-	files := http.FileServer(http.FS(dist))
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", webSocketShell(hub))
-	mux.HandleFunc("/collab", webSocketCollab(hub))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/ws") || strings.HasPrefix(r.URL.Path, "/collab") {
-			http.NotFound(w, r)
-			return
-		}
-		files.ServeHTTP(w, r)
-	})
-	return mux, nil
-}
-
 // updateCommand runs `sshit upgrade` and returns its process exit code.
 func updateCommand(args []string) int {
 	return update.Run(version, args)
@@ -1327,6 +1305,7 @@ func main() {
 	password := flag.String("password", "", "password required for SSH and Web UI access")
 	persist := flag.Bool("persist", true, "persist the workspace to ~/.sshit/<port>/ and restore it after a restart")
 	persistHistory := flag.Bool("persist-history", true, "also save terminal scrollback to ~/.sshit/<port>/history/ and replay it after a restart (may contain secrets; disable with -persist-history=false)")
+	configureDebugFlags()
 	flag.Parse()
 
 	hostKey, hostKeyPath, err := loadOrCreateHostKey()
@@ -1380,6 +1359,8 @@ func main() {
 	}
 
 	log.Printf("using host key %s", hostKeyPath)
+	logDebugMode()
 	log.Printf("listening on %s for SSH and HTTP", addr)
+	log.Printf("http://localhost:%d", *port)
 	log.Fatal(serveMux(listener, sshServer, httpServer))
 }

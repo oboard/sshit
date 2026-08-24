@@ -14,6 +14,17 @@ export default defineConfig({
       $lib: fileURLToPath(new URL("./src/lib", import.meta.url)),
     },
   },
+  server: {
+    host: "127.0.0.1",
+    port: 5173,
+    strictPort: true,
+    hmr: {
+      // The browser connects through sshit's public port; Vite's HTTP and HMR
+      // traffic therefore share that origin via the backend reverse proxy.
+      clientPort: Number(process.env.SSHIT_PORT ?? 2222),
+      path: "/__vite_hmr",
+    },
+  },
   build: {
     outDir: "../internal/web/dist",
     emptyOutDir: true,

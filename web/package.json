@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -21,6 +22,7 @@
     "buffer": "^6.0.3",
     "firacode": "^6.2.0",
     "fontfaceobserver": "^2.3.0",
+    "motion": "^13.1.1",
     "svelte": "^5.56.9",
     "svelte-feather-icons": "^4.2.0",
     "svelte-persisted-store": "^0.12.0",

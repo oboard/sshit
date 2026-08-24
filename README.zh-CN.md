@@ -82,6 +82,17 @@ ssh -p 2222 localhost
 
 打开 <http://localhost:2222>。页面会自动建立 WebSocket 连接，并创建可交互的终端。
 
+## 使用 Vite HMR 进行前端开发
+
+发布版本会把前端构建产物嵌入 Go 二进制。Vite 代理通过条件编译实现，不会进入发布构建。开发前端时，请使用 `debug` 构建标签编译 `sshit`：后端继续处理 `/ws` 与 `/collab`，其余 HTTP 请求（包括 Vite 的 HMR WebSocket）都会反向代理到 Vite，而不会读取嵌入资源。
+
+```bash
+# 同时启动 Vite（127.0.0.1:5173）与 Go debug 后端。
+pnpm dev
+```
+
+请访问 <http://localhost:2222>，不要直接访问 Vite 端口。此时修改 `web/src/` 会由 Vite 热更新，无需重建 Go 或手动刷新浏览器。如需拆开启动，也可使用 `pnpm dev:vite` 和 `pnpm dev:backend`。普通的 `go build` / `go run .` 不包含代理代码，只服务嵌入的前端资源。
+
 ## 使用方式
 
 ### 保持 SSH 工作流

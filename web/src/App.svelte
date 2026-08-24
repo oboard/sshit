@@ -12,6 +12,7 @@
   import Settings from "$lib/ui/Settings.svelte";
   import ToastContainer from "$lib/ui/ToastContainer.svelte";
   import Toolbar from "$lib/ui/Toolbar.svelte";
+  import WorkspaceMode from "$lib/ui/WorkspaceMode.svelte";
   import { CollabConnection, type CollabStatus } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
@@ -70,6 +71,18 @@
   let settingsOpen = false;
   let showNetworkInfo = false;
   let focusedWindowID = -1;
+  let workspaceMode: "floating" | "tiled" = "floating";
+  let tiledViewport = { width: 0, height: 0 };
+  type TileAxis = "horizontal" | "vertical";
+  type TileNode = { id: string; windowId: number } | { id: string; axis: TileAxis; ratio: number; first: TileNode; second: TileNode };
+  type TileSplit = { id: string; axis: TileAxis; x: number; y: number; width: number; height: number; ratio: number };
+  let tileTree: TileNode | null = null;
+  let tileSplits: TileSplit[] = [];
+  let activeTileSplit: string | null = null;
+  let layoutAnimating = false;
+  let splittersVisible = false;
+  let layoutAnimationTimer: number | undefined;
+  let splittersTimer: number | undefined;
   const drawingColors = [
     { value: "#f472b6", name: "Pink" },
     { value: "#a78bfa", name: "Purple" },
@@ -101,6 +114,7 @@
   let viewportX = 0;
   let viewportY = 0;
   let zoom = 1;
+  let floatingCamera: { x: number; y: number; zoom: number } | null = null;
   let panning = false;
   let panStart = [0, 0];
   let panOrigin = [0, 0];
@@ -132,6 +146,11 @@
   let resizingOrigin = [0, 0];
 
   $: shellWindows = windows.filter((w) => w.kind === "shell");
+  $: if (workspaceMode === "tiled") syncTileTree(windows.map((windowState) => windowState.id));
+  // Keep tileTree as an explicit dependency. Svelte's legacy reactivity does
+  // not discover variables referenced only inside tiledWindows(), which meant
+  // splitter drags updated the tree but did not redraw panes until mouseup.
+  $: displayWindows = workspaceMode === "tiled" ? tiledWindows(windows, tiledViewport, tileTree) : windows;
 
   $: usersForUI = users.map((user) => [
     user.id,
@@ -379,9 +398,13 @@
     animateViewTo(targetX, targetY, targetZoom, startX, startY, startZoom, 350);
   }
 
-  function smoothstep(t: number) {
+  let activeViewAnimation: number | undefined;
+
+  // Cubic ease-out: it covers distance quickly then settles gently, avoiding
+  // the mechanical feel of the old linear-ish smoothstep camera transition.
+  function cameraEase(t: number) {
     const x = Math.max(0, Math.min(1, t));
-    return x * x * (3 - 2 * x);
+    return 1 - Math.pow(1 - x, 4);
   }
 
   function animateViewTo(
@@ -391,19 +414,21 @@
     startX = viewportX,
     startY = viewportY,
     startZoom = zoom,
-    duration = 250,
+    duration = 420,
   ) {
+    window.cancelAnimationFrame(activeViewAnimation);
     const start = performance.now();
 
     function frame(now: number) {
-      const k = smoothstep((now - start) / duration);
+      const progress = Math.max(0, Math.min(1, (now - start) / duration));
+      const k = cameraEase(progress);
       zoom = startZoom + (targetZoom - startZoom) * k;
       viewportX = Math.round(startX + (targetX - startX) * k);
       viewportY = Math.round(startY + (targetY - startY) * k);
-      if (k < 1) requestAnimationFrame(frame);
+      if (progress < 1) activeViewAnimation = requestAnimationFrame(frame);
     }
 
-    requestAnimationFrame(frame);
+    activeViewAnimation = requestAnimationFrame(frame);
   }
 
   /** Animate a zoom change while keeping a screen point stationary. */
@@ -440,18 +465,168 @@
   function createShell() {
     const { x, y } = arrangeNewTerminal(existingWindows());
     send({ type: "create", kind: "shell", x, y, cols: 80, rows: 24, width: 760, height: 420 });
-    moveCanvasTo(x, y, fitZoomFor(760), 760, 420);
+    if (workspaceMode === "floating") moveCanvasTo(x, y, fitZoomFor(760), 760, 420);
   }
 
   function createEditorWindow() {
     const { x, y } = arrangeNewTerminal(existingWindows());
     send({ type: "create", kind: "editor", x, y, width: 980, height: 620 });
-    moveCanvasTo(x, y, fitZoomFor(980), 980, 620);
+    if (workspaceMode === "floating") moveCanvasTo(x, y, fitZoomFor(980), 980, 620);
+  }
+
+  let nextTileSplitID = 1;
+
+  function tileLeaves(node: TileNode | null): number[] {
+    if (!node) return [];
+    return "windowId" in node ? [node.windowId] : [...tileLeaves(node.first), ...tileLeaves(node.second)];
+  }
+
+  function pruneTileTree(node: TileNode | null, valid: Set<number>): TileNode | null {
+    if (!node) return null;
+    if ("windowId" in node) return valid.has(node.windowId) ? node : null;
+    const first = pruneTileTree(node.first, valid);
+    const second = pruneTileTree(node.second, valid);
+    if (!first) return second;
+    if (!second) return first;
+    return { ...node, first, second };
+  }
+
+  function syncTileTree(ids: number[]) {
+    const valid = new Set(ids);
+    const currentLeaves = tileLeaves(tileTree);
+    if (currentLeaves.length === ids.length && currentLeaves.every((id) => valid.has(id))) return;
+    let next = pruneTileTree(tileTree, valid);
+    const present = new Set(tileLeaves(next));
+    for (const id of ids) {
+      if (present.has(id)) continue;
+      const leaf: TileNode = { id: `pane-${id}`, windowId: id };
+      if (!next) {
+        next = leaf;
+      } else {
+        // Alternate the outer split direction for each new pane. This produces
+        // a flexible Hyprland-like binary layout instead of a fixed 2×2 grid.
+        const axis: TileAxis = tileLeaves(next).length % 2 === 1 ? "vertical" : "horizontal";
+        next = { id: `split-${nextTileSplitID++}`, axis, ratio: 0.5, first: next, second: leaf };
+      }
+      present.add(id);
+    }
+    tileTree = next;
+  }
+
+  function tiledWindows(source: WindowState[], viewport: { width: number; height: number }, tree: TileNode | null) {
+    if (!source.length || !viewport.width || !viewport.height || !tree) return source;
+    const topInset = 72;
+    const byID = new Map(source.map((windowState) => [windowState.id, windowState]));
+    const result: WindowState[] = [];
+    const splits: TileSplit[] = [];
+
+    function visit(node: TileNode, x: number, y: number, width: number, height: number) {
+      if ("windowId" in node) {
+        const windowState = byID.get(node.windowId);
+        if (windowState) result.push({ ...windowState, x, y, width: Math.max(1, width), height: Math.max(1, height), zIndex: result.length + 1 });
+        return;
+      }
+      if (node.axis === "vertical") {
+        const firstWidth = Math.round(width * node.ratio);
+        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x: x + firstWidth, y, width, height });
+        visit(node.first, x, y, firstWidth, height);
+        visit(node.second, x + firstWidth, y, width - firstWidth, height);
+      } else {
+        const firstHeight = Math.round(height * node.ratio);
+        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x, y: y + firstHeight, width, height });
+        visit(node.first, x, y, width, firstHeight);
+        visit(node.second, x, y + firstHeight, width, height - firstHeight);
+      }
+    }
+
+    visit(tree, 0, topInset, viewport.width, Math.max(1, viewport.height - topInset));
+    tileSplits = splits;
+    return result;
+  }
+
+  async function applyTiledLayout() {
+    if (!fabricEl) return;
+    const rect = fabricEl.getBoundingClientRect();
+    tiledViewport = { width: rect.width, height: rect.height };
+    // Tiled panes use the canonical camera. Entering it is animated by the
+    // mode switch so the floating canvas doesn't snap underneath the panes.
+    await tick();
+    // Fit locally after the derived geometry reaches the DOM. Do not patch
+    // shared geometry or PTY sizes: tiling is this browser's presentation mode.
+    for (const windowState of displayWindows) {
+      if (windowState.kind === "shell") termRefs[windowState.id]?.fitSize();
+    }
+  }
+
+  function startTileSplit(id: string, event: PointerEvent) {
+    if (workspaceMode !== "tiled") return;
+    event.preventDefault();
+    activeTileSplit = id;
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  function updateTileRatio(node: TileNode | null, id: string, ratio: number): TileNode | null {
+    if (!node || "windowId" in node) return node;
+    if (node.id === id) return { ...node, ratio };
+    return { ...node, first: updateTileRatio(node.first, id, ratio)!, second: updateTileRatio(node.second, id, ratio)! };
+  }
+
+  function moveTileSplit(event: PointerEvent) {
+    if (!activeTileSplit || !fabricEl) return;
+    const split = tileSplits.find((candidate) => candidate.id === activeTileSplit);
+    const rect = fabricEl.getBoundingClientRect();
+    if (!split) return;
+    event.preventDefault();
+    const ratio = split.axis === "vertical"
+      ? (event.clientX - rect.left - split.x + split.ratio * split.width) / Math.max(1, split.width)
+      : (event.clientY - rect.top - split.y + split.ratio * split.height) / Math.max(1, split.height);
+    tileTree = updateTileRatio(tileTree, activeTileSplit, Math.max(0.12, Math.min(0.88, ratio)));
+  }
+
+  function stopTileSplit() {
+    if (!activeTileSplit) return;
+    activeTileSplit = null;
+    // Refit terminal cells once the splitter settles, rather than doing costly
+    // xterm measurements for every pointer-move frame.
+    void applyTiledLayout();
+  }
+
+  function setWorkspaceMode(nextMode: "floating" | "tiled") {
+    if (nextMode === workspaceMode) return;
+    const wasFloating = workspaceMode === "floating";
+    workspaceMode = nextMode;
+    layoutAnimating = true;
+    splittersVisible = false;
+    window.clearTimeout(layoutAnimationTimer);
+    window.clearTimeout(splittersTimer);
+    layoutAnimationTimer = window.setTimeout(() => (layoutAnimating = false), 480);
+    splittersTimer = window.setTimeout(() => (splittersVisible = nextMode === "tiled"), 300);
+    if (nextMode === "tiled") {
+      // Remember the free-canvas camera exactly as the user left it. Tiled mode
+      // is only a local presentation layer and must never discard this state.
+      floatingCamera = { x: viewportX, y: viewportY, zoom };
+      // The viewport and tree must exist before the first tiled render. Running
+      // this synchronously prevents the first toggle from rendering floating
+      // geometry and only laying out on the second click.
+      if (fabricEl) {
+        const rect = fabricEl.getBoundingClientRect();
+        tiledViewport = { width: rect.width, height: rect.height };
+      }
+      syncTileTree(windows.map((windowState) => windowState.id));
+      animateViewTo(0, 0, 1, viewportX, viewportY, zoom, 480);
+      void applyTiledLayout();
+    } else if (floatingCamera) {
+      // Return to the exact pan and magnification the floating workspace had
+      // before tiling, rather than forcing the user back to a 100% overview.
+      animateViewTo(floatingCamera.x, floatingCamera.y, floatingCamera.zoom, viewportX, viewportY, zoom, 480);
+    } else if (wasFloating) {
+      layoutAnimating = false;
+    }
   }
 
   function focusWindow(id: number) {
     focusedWindowID = id;
-    send({ type: "patch", id, patch: { zIndex: ++topZ } });
+    if (workspaceMode === "floating") send({ type: "patch", id, patch: { zIndex: ++topZ } });
   }
 
   function closeWindow(id: number) {
@@ -460,6 +635,7 @@
   }
 
   function startMove(id: number, event: PointerEvent) {
+    if (workspaceMode === "tiled") return;
     event.preventDefault();
     focusWindow(id);
     const win = windowById(id);
@@ -470,6 +646,7 @@
   }
 
   function startResize(id: number, event: PointerEvent, width: number, height: number) {
+    if (workspaceMode === "tiled") return;
     event.preventDefault();
     focusWindow(id);
     resizingWindowID = id;
@@ -487,7 +664,7 @@
 
   function handlePointerDown(event: PointerEvent) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    if (drawingMode) return;
+    if (drawingMode || workspaceMode === "tiled") return;
     const target = event.target as HTMLElement;
     if (target.closest("[data-no-pan]")) return;
     if (target.closest("[data-pan-surface]") === null) return;
@@ -580,7 +757,7 @@
   }
 
   function handleWheel(event: WheelEvent) {
-    if (drawingMode) return;
+    if (drawingMode || workspaceMode === "tiled") return;
     event.preventDefault();
     const rect = fabricEl.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
@@ -787,6 +964,9 @@
 
   onDestroy(() => {
     manualClose = true;
+    window.clearTimeout(layoutAnimationTimer);
+    window.clearTimeout(splittersTimer);
+    window.cancelAnimationFrame(activeViewAnimation);
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
     document.removeEventListener("gesturestart", preventPageGesture);
@@ -798,7 +978,7 @@
 </script>
 
 <ToastContainer />
-<svelte:window on:keydown={handleDrawingKeydown} />
+<svelte:window on:keydown={handleDrawingKeydown} on:resize={() => { if (workspaceMode === "tiled") void applyTiledLayout(); }} />
 {#if authenticated}
   <ChooseName />
 {/if}
@@ -811,9 +991,9 @@
   bind:this={fabricEl}
   class:cursor-grabbing={panning}
   on:pointerdown={handlePointerDown}
-  on:pointermove={handlePointerMove}
-  on:pointerup={handlePointerUp}
-  on:pointercancel={handlePointerUp}
+  on:pointermove={(event) => { moveTileSplit(event); handlePointerMove(event); }}
+  on:pointerup={(event) => { stopTileSplit(); handlePointerUp(event); }}
+  on:pointercancel={(event) => { stopTileSplit(); handlePointerUp(event); }}
   on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
@@ -830,12 +1010,17 @@
     />
   </div>
 
-  <div class="absolute top-5 right-5 z-[10000] flex items-center gap-3">
-    <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
-    <div class="hidden sm:block">
-      <NameList users={usersForUI} />
+  <div class="absolute top-4 right-4 z-[10000] flex items-start gap-3">
+    <div class="relative">
+      <WorkspaceMode mode={workspaceMode} {windows} on:change={(event) => setWorkspaceMode(event.detail.mode)} on:arrange={() => void applyTiledLayout()} />
     </div>
-    <Avatars users={usersForUI} />
+    <div class="flex items-center gap-3 pt-1">
+      <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
+      <div class="hidden sm:block">
+        <NameList users={usersForUI} />
+      </div>
+      <Avatars users={usersForUI} />
+    </div>
   </div>
 
   {#if showNetworkInfo}
@@ -848,7 +1033,7 @@
     </div>
   {/if}
 
-  <div data-pan-surface class="absolute inset-0 bg-[radial-gradient(circle_at_30%_0%,rgba(192,38,211,0.22),transparent_32rem),radial-gradient(circle_at_80%_20%,rgba(37,99,235,0.2),transparent_28rem),#111111]" class:cursor-crosshair={drawingMode}>
+  <div data-pan-surface class="hypr-surface absolute inset-0" class:cursor-crosshair={drawingMode} class:tile-layout-animating={layoutAnimating}>
     <!-- touch-action: none lets our pointer handlers own one-finger pans and
          two-finger pinches without the browser hijacking the gesture. Windows
          float above this layer, so terminal/editor touch scrolling is unaffected. -->
@@ -861,7 +1046,7 @@
     >zoom {Math.round(zoom * 100)}%</button>
 
     <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
-    {#each windows as windowState (windowState.id)}
+    {#each displayWindows as windowState (windowState.id)}
       {#if windowState.kind === "shell"}
         <WebTerm
           bind:this={termRefs[windowState.id]}
@@ -869,6 +1054,8 @@
           output={outputs[windowState.id] ?? ""}
           zIndex={windowState.zIndex ?? 1}
           focused={focusedWindowID === windowState.id}
+          tiled={workspaceMode === "tiled"}
+          {layoutAnimating}
           on:focus={(event) => focusWindow(event.detail.id)}
           on:blur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
           on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
@@ -885,6 +1072,8 @@
           {windowState}
           zIndex={windowState.zIndex ?? 1}
           focused={focusedWindowID === windowState.id}
+          tiled={workspaceMode === "tiled"}
+          {layoutAnimating}
           on:focus={(event) => focusWindow(event.detail.id)}
           on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
           on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
@@ -892,6 +1081,24 @@
         />
       {/if}
     {/each}
+
+    {#if workspaceMode === "tiled" && splittersVisible}
+      {#each tileSplits as split (split.id)}
+        <div
+          class="tile-splitter"
+          class:tile-splitter-column={split.axis === "vertical"}
+          class:tile-splitter-row={split.axis === "horizontal"}
+          data-no-pan
+          role="separator"
+          aria-label={split.axis === "vertical" ? "Resize tiled columns" : "Resize tiled rows"}
+          aria-orientation={split.axis === "vertical" ? "vertical" : "horizontal"}
+          style={split.axis === "vertical"
+            ? `left: ${split.x}px; top: ${split.y}px; height: ${Math.max(1, split.height)}px;`
+            : `left: ${split.x}px; top: ${split.y}px; width: ${Math.max(1, split.width)}px;`}
+          on:pointerdown={(event) => startTileSplit(split.id, event)}
+        ></div>
+      {/each}
+    {/if}
 
     {#each otherUsersForUI as [id, user] (id)}
       {#if user.cursor}

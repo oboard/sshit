@@ -87,6 +87,17 @@ ssh -p 2222 localhost
 
 Open <http://localhost:2222>. The page automatically establishes a WebSocket connection and provides an interactive terminal.
 
+## Development with Vite HMR
+
+Production builds embed the Web UI in the Go binary. The Vite proxy is conditionally compiled and is absent from release builds. For frontend development, compile with the `debug` build tag; the backend keeps serving `/ws` and `/collab`, while every other HTTP request—including Vite's HMR WebSocket—is reverse-proxied to Vite instead of the embedded assets.
+
+```bash
+# Starts Vite (127.0.0.1:5173) and the Go debug backend together.
+pnpm dev
+```
+
+Open <http://localhost:2222>, not Vite's port. Changes under `web/src/` now use Vite hot module reload without rebuilding Go or refreshing the page. `pnpm dev:vite` and `pnpm dev:backend` are also available when you need separate processes. A normal `go build` / `go run .` excludes proxy code and serves only embedded frontend assets.
+
 ## Usage
 
 ### Keep Your SSH Workflow

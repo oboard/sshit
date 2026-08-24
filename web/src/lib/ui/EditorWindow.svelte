@@ -12,6 +12,8 @@
   export let windowState: WindowState;
   export let zIndex = 1;
   export let focused = false;
+  export let tiled = false;
+  export let layoutAnimating = false;
 
   const dispatch = createEventDispatcher<{
     close: { id: number };
@@ -32,6 +34,8 @@
   height={windowState.height}
   {zIndex}
   {focused}
+  {tiled}
+  {layoutAnimating}
   background="#111111"
   ariaLabel={title}
   resizeLabel="Resize {title}"

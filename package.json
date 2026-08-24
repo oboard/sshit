@@ -3,11 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "concurrently --kill-others-on-fail \"pnpm --dir web dev\" \"go run -tags debug .\"",
+    "dev:vite": "pnpm --dir web dev",
+    "dev:backend": "go run -tags debug .",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "vitepress": "^1.6.4"
   }
 }
