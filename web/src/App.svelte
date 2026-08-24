@@ -504,7 +504,7 @@
         next = leaf;
       } else {
         // Alternate the outer split direction for each new pane. This produces
-        // a flexible Hyprland-like binary layout instead of a fixed 2×2 grid.
+        // a flexible binary layout instead of a fixed 2×2 grid.
         const axis: TileAxis = tileLeaves(next).length % 2 === 1 ? "vertical" : "horizontal";
         next = { id: `split-${nextTileSplitID++}`, axis, ratio: 0.5, first: next, second: leaf };
       }

@@ -36,7 +36,7 @@ export default defineConfig({
             { text: '命令行配置', link: '/reference/configuration' },
             { text: '架构与协议', link: '/reference/architecture' },
             { text: '从源码构建', link: '/reference/building' },
-            { text: 'Hyprland 快捷键', link: '/reference/hyprland-shortcuts' },
+            { text: '窗口管理快捷键', link: '/reference/tiled-layout-shortcuts' },
           ],
         },
       ],
