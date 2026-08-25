@@ -78,6 +78,8 @@
   let windows: WindowState[] = [];
   let termRefs: Record<number, WebTerm> = {};
   let outputs: Record<number, string> = {};
+  let pendingTiledPtySizes: Record<number, { cols: number; rows: number }> = {};
+  let tiledPtyFlushTimer: number | undefined;
   let topZ = 1;
   let settingsOpen = false;
   let showNetworkInfo = false;
@@ -650,6 +652,32 @@
     });
   }
 
+  function reportTiledPtyResize(id: number, cols: number, rows: number) {
+    if (workspaceMode !== "tiled") return;
+    windows = windows.map((windowState) =>
+      windowState.id === id ? { ...windowState, cols, rows } : windowState,
+    );
+    // Never broadcast a PTY resize while Ctrl-dragging: the user may pause over
+    // a pane, and any server state broadcast would disrupt that active gesture.
+    pendingTiledPtySizes = { ...pendingTiledPtySizes, [id]: { cols, rows } };
+    if (!tiledReorderDrag) {
+      window.clearTimeout(tiledPtyFlushTimer);
+      tiledPtyFlushTimer = window.setTimeout(flushTiledPtySizes, 180);
+    }
+  }
+
+  function flushTiledPtySizes() {
+    window.clearTimeout(tiledPtyFlushTimer);
+    if (workspaceMode !== "tiled") {
+      pendingTiledPtySizes = {};
+      return;
+    }
+    for (const [id, { cols, rows }] of Object.entries(pendingTiledPtySizes)) {
+      send({ type: "patch", id: Number(id), patch: { cols, rows } });
+    }
+    pendingTiledPtySizes = {};
+  }
+
   function tileLeaves(node: TileNode | null): number[] {
     if (!node) return [];
     return "windowId" in node
@@ -1055,6 +1083,9 @@
     tiledReorderPotential = null;
     persistTiledLayout();
     void applyTiledLayout();
+    // The final tree and PTY grid updates are both committed only after the
+    // pointer gesture has ended, so no server state broadcast can interrupt it.
+    flushTiledPtySizes();
   }
 
   function handleTiledReorderPointerDown(event: PointerEvent) {
@@ -1554,6 +1585,7 @@
   onDestroy(() => {
     manualClose = true;
     window.clearTimeout(layoutAnimationTimer);
+    window.clearTimeout(tiledPtyFlushTimer);
     window.cancelAnimationFrame(activeViewAnimation);
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
@@ -1687,6 +1719,7 @@
             onStartMove={(id, event) => startMove(id, event)}
             onStartResize={(id, event, width, height) =>
               startResize(id, event, width, height)}
+            onTiledResize={reportTiledPtyResize}
             onInput={(id, data) => send({ type: "input", id, data })}
             onResize={(id, cols, rows, width, height) => {
               windows = windows.map((w) =>

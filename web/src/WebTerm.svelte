@@ -22,6 +22,7 @@
   export let onClose: (id: number) => void = () => {};
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
+  export let onTiledResize: (id: number, cols: number, rows: number) => void = () => {};
   export let onFocus: (id: number) => void = () => {};
   export let onBlur: (id: number) => void = () => {};
 
@@ -34,11 +35,21 @@
   let renderedOutputLength = 0;
   let disposed = false;
   let terminalError = "";
+  let terminalResizeObserver: ResizeObserver | undefined;
+  let terminalFitFrame: number | undefined;
+  let terminalFitSettleFrame: number | undefined;
 
   $: theme = themes[$settings.theme];
   $: if (terminal) {
     terminal.options.theme = theme;
     terminal.options.scrollback = $settings.scrollback;
+  }
+
+  // Make the derived tiled pane geometry an explicit dependency. Ctrl-drag
+  // reordering changes these props even when the terminal DOM observer fires
+  // before Motion finishes laying out its new slot.
+  $: if (tiled && terminalReady && shell.width >= 0 && shell.height >= 0) {
+    scheduleTerminalFit();
   }
 
   $: if (terminalReady && terminal && output.length !== renderedOutputLength) {
@@ -71,6 +82,24 @@
     }
     fitAddon.fit();
     return { cols: terminal.cols, rows: terminal.rows };
+  }
+
+  function scheduleTerminalFit() {
+    if (!tiled || !terminal || !fitAddon || !termEl) return;
+    window.cancelAnimationFrame(terminalFitFrame);
+    window.cancelAnimationFrame(terminalFitSettleFrame);
+    // First frame observes Svelte's updated width/height. A second frame handles
+    // the slot change produced by a Ctrl-drag reorder after Motion has committed
+    // its FLIP layout, so FitAddon measures the new pane rather than its old one.
+    terminalFitFrame = window.requestAnimationFrame(() => {
+      fitAddon.fit();
+      terminalFitSettleFrame = window.requestAnimationFrame(() => {
+        fitAddon.fit();
+        if (terminal.cols !== shell.cols || terminal.rows !== shell.rows) {
+          onTiledResize(shell.id, terminal.cols, terminal.rows);
+        }
+      });
+    });
   }
 
   async function waitForTerminalFont() {
@@ -189,6 +218,8 @@
       });
       terminal.open(termEl);
       installScaledMouseCoordinateFix();
+      terminalResizeObserver = new ResizeObserver(scheduleTerminalFit);
+      terminalResizeObserver.observe(termEl);
       terminalReady = true;
       terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
       terminal.onData((data) => onInput(shell.id, data));
@@ -214,6 +245,9 @@
 
   onDestroy(() => {
     disposed = true;
+    terminalResizeObserver?.disconnect();
+    window.cancelAnimationFrame(terminalFitFrame);
+    window.cancelAnimationFrame(terminalFitSettleFrame);
     terminal?.dispose();
   });
 </script>
