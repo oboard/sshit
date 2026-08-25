@@ -15,6 +15,10 @@ export type WindowState = {
   rows?: number;
   /** Shell-only: replay scrollback sent on hello/state. */
   buffer?: string;
+  /** Shell-only: current working directory. */
+  cwd?: string;
+  /** Shell-only: user home directory for path shortening. */
+  home?: string;
   /** Editor-only: collaborative document id. */
   docId?: string;
 };

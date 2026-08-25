@@ -32,8 +32,16 @@
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
+  function abbreviateHomePath(path: string) {
+    const home = shell.home;
+    if (!path || !home) return path;
+    return path === home || path.startsWith(`${home}/`)
+      ? path.replace(home, "~")
+      : path;
+  }
+
   let terminalReady = false;
-  let currentTitle = "sshit shell";
+  let currentTitle = abbreviateHomePath(shell.cwd || "") || "sshit shell";
   let renderedOutputLength = 0;
   let disposed = false;
   let terminalError = "";
@@ -229,10 +237,9 @@
       terminalResizeObserver.observe(termEl);
       terminalReady = true;
       terminal.onTitleChange((title) => {
-        currentTitle = title || "sshit shell";
+        currentTitle = title || abbreviateHomePath(shell.cwd || "") || "sshit shell";
         onTitleChange(shell.id, currentTitle);
       });
-      onTitleChange(shell.id, currentTitle);
       terminal.onData((data) => onInput(shell.id, data));
       // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
       // available after open(), so use native focus events instead.

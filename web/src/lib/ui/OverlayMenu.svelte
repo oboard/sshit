@@ -3,6 +3,7 @@
   import { XIcon } from "svelte-feather-icons";
 
   function handleKeydown(event: KeyboardEvent) {
+    if (!open) return;
     if (event.key === "Escape") {
       event.stopPropagation();
       onClose();
@@ -17,9 +18,9 @@
   export let onClose: () => void = () => {};
 </script>
 
-{#if open}
-  <svelte:window on:keydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} />
 
+{#if open}
   <div
     class="fixed inset-0 z-50 grid place-items-center"
     role="dialog"

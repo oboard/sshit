@@ -279,13 +279,14 @@
     ? focusedWindow.kind === "shell"
       ? shellTitles[focusedWindow.id] ?? "sshit shell"
       : "Markdown Editor"
-    : "workspace";
+    : "sshit";
 
   function windowById(id: number) {
     return windows.find((w) => w.id === id);
   }
 
   function handleShellTitleChange(id: number, title: string) {
+    if (!title?.trim()) return;
     shellTitles = {
       ...shellTitles,
       [id]: title,

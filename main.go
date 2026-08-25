@@ -313,6 +313,8 @@ type windowState struct {
 	Cols   uint16 `json:"cols,omitempty"`
 	Rows   uint16 `json:"rows,omitempty"`
 	Buffer string `json:"buffer,omitempty"`
+	Cwd    string `json:"cwd,omitempty"`
+	Home   string `json:"home,omitempty"`
 
 	// Editor-only.
 	DocID string `json:"docId,omitempty"`
@@ -327,6 +329,7 @@ type webWindow struct {
 	buffer []byte
 
 	cwd           string
+	home          string
 	agentKind     string
 	agentSession  string
 	historyOffset int
@@ -425,8 +428,12 @@ func (h *webHub) snapshotLocked(includeBuffers bool) (users []webUser, windows [
 	}
 	for _, w := range h.windows {
 		state := w.windowState
-		if includeBuffers && w.Kind == persist.KindShell {
-			state.Buffer = string(w.buffer)
+		if w.Kind == persist.KindShell {
+			state.Cwd = w.cwd
+			state.Home = w.home
+			if includeBuffers {
+				state.Buffer = string(w.buffer)
+			}
 		}
 		windows = append(windows, state)
 	}
@@ -555,8 +562,9 @@ func (h *webHub) createShell(x, y int, cols, rows, width, height, zIndex int, cw
 	if height == 0 {
 		height = 420
 	}
+	home, _ := os.UserHomeDir()
 	if cwd == "" {
-		cwd, _ = os.UserHomeDir()
+		cwd = home
 	}
 
 	var cmd *exec.Cmd
@@ -586,10 +594,12 @@ func (h *webHub) createShell(x, y int, cols, rows, width, height, zIndex int, cw
 			ID: h.idSeq, Kind: persist.KindShell,
 			X: x, Y: y, Width: width, Height: height, ZIndex: zIndex,
 			Cols: uint16(cols), Rows: uint16(rows),
+			Cwd: cwd, Home: home,
 		},
-		pty: p,
-		pid: cmd.Process.Pid,
-		cwd: cwd,
+		pty:  p,
+		pid:  cmd.Process.Pid,
+		cwd:  cwd,
+		home: home,
 	}
 	h.windows[win.ID] = win
 	h.dirty = true
@@ -816,8 +826,9 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 		cmd = exec.Command(defaultShell())
 	}
 	cwd := saved.Cwd
+	home, _ := os.UserHomeDir()
 	if cwd == "" {
-		cwd, _ = os.UserHomeDir()
+		cwd = home
 	}
 	cmd.Dir = cwd
 	cmd.Env = terminalEnv("xterm-256color")
@@ -831,10 +842,12 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 			ID: saved.ID, Kind: persist.KindShell,
 			X: saved.X, Y: saved.Y, Width: saved.Width, Height: saved.Height, ZIndex: saved.ZIndex,
 			Cols: saved.Cols, Rows: saved.Rows,
+			Cwd: cwd, Home: home,
 		},
-		pty: p,
-		pid: cmd.Process.Pid,
-		cwd: cwd,
+		pty:  p,
+		pid:  cmd.Process.Pid,
+		cwd:  cwd,
+		home: home,
 	}
 
 	// Replay saved scrollback so the pane shows its previous screen contents.
@@ -978,12 +991,14 @@ func (h *webHub) refreshAgents() {
 				win.agentKind, win.agentSession = ref.Kind, ref.SessionID
 				if agentCwd != "" && agentCwd != win.cwd {
 					win.cwd = agentCwd
+					win.windowState.Cwd = agentCwd
 					h.dirty = true
 				}
 			} else {
 				win.agentKind, win.agentSession = "", ""
 				if shellCwd != "" && shellCwd != win.cwd {
 					win.cwd = shellCwd
+					win.windowState.Cwd = shellCwd
 					h.dirty = true
 				}
 			}

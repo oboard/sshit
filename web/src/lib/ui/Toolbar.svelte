@@ -24,14 +24,20 @@
 
 <div class="panel toolbar w-full px-3 py-2">
   <div class="flex min-w-0 items-center gap-3 select-none">
-    <a href="/" class="flex min-w-0 shrink items-center gap-2 overflow-hidden text-lg font-semibold tracking-tight">
-      <span class="flex-shrink-0">sshit</span>
-      <span class="toolbar-title truncate text-sm font-medium text-zinc-400">{title}</span>
+    <a
+      href="/"
+      class="flex min-w-0 shrink items-center gap-2 overflow-hidden text-lg font-semibold tracking-tight"
+    >
+      <span class="toolbar-title truncate text-sm font-medium"
+        >{title}</span
+      >
     </a>
 
     <div class="h-5 border-l-4 border-zinc-800"></div>
 
-    <div class="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-x-auto">
+    <div
+      class="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-x-auto"
+    >
       <button
         class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700 disabled:bg-transparent disabled:opacity-50"
         on:click={onCreate}
@@ -39,15 +45,26 @@
         title={!connected
           ? "Not connected"
           : hasWriteAccess === false
-          ? "No write access"
-          : "Create new terminal"}
+            ? "No write access"
+            : "Create new terminal"}
       >
         <PlusCircleIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onCreateEditor} title="Create Markdown editor window">
+      <button
+        class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700"
+        on:click={onCreateEditor}
+        title="Create Markdown editor window"
+      >
         <FileTextIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="icon-button" class:active={drawingMode} on:click={onToggleDrawing} title={drawingMode ? "Switch to pointer mode" : "Switch to drawing mode"}>
+      <button
+        class="icon-button"
+        class:active={drawingMode}
+        on:click={onToggleDrawing}
+        title={drawingMode
+          ? "Switch to pointer mode"
+          : "Switch to drawing mode"}
+      >
         <PenToolIcon strokeWidth={1.5} class="p-0.5" />
       </button>
       <button
@@ -63,10 +80,16 @@
           <LayersIcon strokeWidth={1.5} class="p-0.5" />
         {/if}
       </button>
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onSettings}>
+      <button
+        class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700"
+        on:click={onSettings}
+      >
         <SettingsIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onNetworkInfo}>
+      <button
+        class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700"
+        on:click={onNetworkInfo}
+      >
         <WifiIcon strokeWidth={1.5} class="p-0.5" />
       </button>
     </div>
