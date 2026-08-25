@@ -24,6 +24,18 @@
   } from "$lib/yjsStore";
 
   import { arrangeNewTerminal } from "./arrange";
+  import {
+    leafOrder,
+    neighborPane,
+    moveWindowDirection,
+    toggleSplitAxis,
+    isLeaf,
+    swapLeaves,
+    type TileNode,
+    type TileAxis,
+  } from "$lib/tiling/tiling";
+  import { handleTilingKey, type ActionTable } from "$lib/tiling/keybinds";
+  import { getSharedTileTree, getSharedFloated, publishTileLayout, observeTileLayout } from "$lib/tiling/tileLayout";
   import WebTerm from "./WebTerm.svelte";
 
   type ServerUser = {
@@ -83,6 +95,34 @@
   let splittersVisible = false;
   let layoutAnimationTimer: number | undefined;
   let splittersTimer: number | undefined;
+  // Windows floated out of the tiled tree (drag-out). They render as floating
+  // overlays above the tiled grid. This is the presentational counterpart of
+  // Hyprland floating a window during `mousemove`.
+  let floatedTileIds: number[] = [];
+  // Observer handle for the shared, multi-user tiled layout. Detached on
+  // destroy so this client stops adopting remote layout edits once it leaves.
+  let unobserveTiledLayout: (() => void) | undefined;
+  // The pane that currently owns keyboard/mouse focus in tiled mode. Mirrors
+  // Hyprland's `focusState`: a single shared focus target for both input paths.
+  let tiledFocusId = -1;
+  // Ctrl is the modifier that primes tiled chords and drag-to-reorder.
+  let ctrlModifierHeld = false;
+  const TILED_DRAG_THRESHOLD = 8;
+  let tiledReorderPotential: { windowId: number; downX: number; downY: number } | null = null;
+  let tiledReorderDrag: {
+    windowId: number;
+    width: number;
+    height: number;
+    originX: number;
+    originY: number;
+    downX: number;
+    downY: number;
+    ghostX: number;
+    ghostY: number;
+    lastTarget: number | null;
+    didReorder: boolean;
+    targets: Array<{ windowId: number; x: number; y: number; width: number; height: number }>;
+  } | null = null;
   const drawingColors = [
     { value: "#f472b6", name: "Pink" },
     { value: "#a78bfa", name: "Purple" },
@@ -141,6 +181,7 @@
   let movingWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
+  let movingPointerPos = { clientX: 0, clientY: 0 };  // Track pointer during tiled drag
   let resizingWindowID = -1;
   let resizingStart = [0, 0];
   let resizingOrigin = [0, 0];
@@ -150,7 +191,19 @@
   // Keep tileTree as an explicit dependency. Svelte's legacy reactivity does
   // not discover variables referenced only inside tiledWindows(), which meant
   // splitter drags updated the tree but did not redraw panes until mouseup.
-  $: displayWindows = workspaceMode === "tiled" ? tiledWindows(windows, tiledViewport, tileTree) : windows;
+  $: displayWindows = (workspaceMode === "tiled" ? tiledWindows(windows, tiledViewport, tileTree) : windows)
+    // Keep the real pane under the pointer while every other pane reflows around it.
+    .map((windowState) => windowState.id === tiledReorderDrag?.windowId
+      ? { ...windowState, x: tiledReorderDrag.ghostX, y: tiledReorderDrag.ghostY, zIndex: 1000 }
+      : windowState);
+
+  // Floating overlays that escape the tiled grid while still being part of the
+  // same workspace (windows floated out via Ctrl+drag).
+  $: floatedOverlays = workspaceMode === "tiled"
+    ? floatedTileIds
+        .map((id) => windows.find((w) => w.id === id))
+        .filter((w): w is WindowState => !!w)
+    : [];
 
   $: usersForUI = users.map((user) => [
     user.id,
@@ -236,7 +289,7 @@
       }
       outputs = nextOutputs;
 
-      if (previousCount === 0 && windows.length >= 1) {
+      if (previousCount === 0 && windows.length >= 1 && workspaceMode === "floating") {
         const target = windows.find((w) => w.kind === "shell") ?? windows[0];
         const fitZoom = fitZoomFor(target.width || 760);
         requestAnimationFrame(() => moveCanvasTo(target.x, target.y, fitZoom, target.width || 760, target.height || 420));
@@ -476,6 +529,15 @@
 
   let nextTileSplitID = 1;
 
+  /**
+   * Push the current tiled-layout snapshot into the shared Yjs store so every
+   * connected user sees the same arrangement. Local writes are tagged with a
+   * local origin and ignored by the observer, so this never echoes back.
+   */
+  function persistTiledLayout() {
+    publishTileLayout(tileTree, floatedTileIds);
+  }
+
   function tileLeaves(node: TileNode | null): number[] {
     if (!node) return [];
     return "windowId" in node ? [node.windowId] : [...tileLeaves(node.first), ...tileLeaves(node.second)];
@@ -493,6 +555,8 @@
 
   function syncTileTree(ids: number[]) {
     const valid = new Set(ids);
+    // Windows floated out of the grid are not part of the tiled tree.
+    for (const floated of floatedTileIds) valid.delete(floated);
     const currentLeaves = tileLeaves(tileTree);
     if (currentLeaves.length === ids.length && currentLeaves.every((id) => valid.has(id))) return;
     let next = pruneTileTree(tileTree, valid);
@@ -510,20 +574,46 @@
       }
       present.add(id);
     }
+    // Update viewport synchronously so displayWindows can use the correct dimensions.
+    if (workspaceMode === "tiled" && fabricEl) {
+      const rect = fabricEl.getBoundingClientRect();
+      tiledViewport = { width: rect.width, height: rect.height };
+    }
     tileTree = next;
+    // Publish the reconciled tree so the room sees the same tiled arrangement.
+    persistTiledLayout();
+    // Apply the new layout to fit terminals to their panes.
+    void applyTiledLayout();
+    // Default the tiled focus to the first pane if nothing focused or the old
+    // focus drifted out of the tree.
+    const leaves = tileLeaves(next);
+    if (tiledFocusId === -1 || !leaves.includes(tiledFocusId)) {
+      tiledFocusId = leaves[0] ?? -1;
+      if (tiledFocusId !== -1) focusedWindowID = tiledFocusId;
+    }
   }
 
   function tiledWindows(source: WindowState[], viewport: { width: number; height: number }, tree: TileNode | null) {
     if (!source.length || !viewport.width || !viewport.height || !tree) return source;
     const topInset = 72;
+    const gap = 10;  // Gap between tiled windows
     const byID = new Map(source.map((windowState) => [windowState.id, windowState]));
+
     const result: WindowState[] = [];
     const splits: TileSplit[] = [];
 
     function visit(node: TileNode, x: number, y: number, width: number, height: number) {
       if ("windowId" in node) {
         const windowState = byID.get(node.windowId);
-        if (windowState) result.push({ ...windowState, x, y, width: Math.max(1, width), height: Math.max(1, height), zIndex: result.length + 1 });
+        // Apply gap by shrinking the window and offsetting position
+        if (windowState) result.push({
+          ...windowState,
+          x: x + gap / 2,
+          y: y + gap / 2,
+          width: Math.max(1, width - gap),
+          height: Math.max(1, height - gap),
+          zIndex: result.length + 1
+        });
         return;
       }
       if (node.axis === "vertical") {
@@ -588,6 +678,7 @@
     activeTileSplit = null;
     // Refit terminal cells once the splitter settles, rather than doing costly
     // xterm measurements for every pointer-move frame.
+    persistTiledLayout();
     void applyTiledLayout();
   }
 
@@ -595,6 +686,17 @@
     if (nextMode === workspaceMode) return;
     const wasFloating = workspaceMode === "floating";
     workspaceMode = nextMode;
+    // Remember the toggle locally so a reload returns to the same view.
+    localStorage.setItem("sshx-workspace-mode", nextMode);
+    // Leaving tiled discards the tiled-only presentation state (floated-out
+    // overlays) — the shared window geometry is intact.
+    if (nextMode === "floating") {
+      floatedTileIds = [];
+      ctrlModifierHeld = false;
+      // Floated panes return to the shared grid; publish so the room's layout
+      // reflects that they are no longer floated out.
+      persistTiledLayout();
+    }
     layoutAnimating = true;
     splittersVisible = false;
     window.clearTimeout(layoutAnimationTimer);
@@ -626,15 +728,114 @@
 
   function focusWindow(id: number) {
     focusedWindowID = id;
+    if (workspaceMode === "tiled") {
+      // Tiled focus is a grid focus: no z-order change, just track it. Mirrors
+      // Hyprland's focusState — a single focus target steered by both keyboard
+      // (movefocus) and mouse (click/pointer over).
+      tiledFocusId = id;
+      if (isFloatedTile(id)) focusFloatedOverlay(id, true);
+      // When the focused pane isn't tiled (floated out), full-screen applies to it.
+      return;
+    }
     if (workspaceMode === "floating") send({ type: "patch", id, patch: { zIndex: ++topZ } });
   }
 
   function closeWindow(id: number) {
     if (focusedWindowID === id) focusedWindowID = -1;
+    if (tiledFocusId === id) tiledFocusId = -1;
+    floatedTileIds = floatedTileIds.filter((n) => n !== id);
     send({ type: "close", id });
+    persistTiledLayout();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tiled-mode window management (Hyprland-inspired focus + drag model)
+  // ---------------------------------------------------------------------------
+
+  function isFloatedTile(id: number) {
+    return floatedTileIds.includes(id);
+  }
+
+  /** Focus an overlay window that was floated out of the grid. */
+  function focusFloatedOverlay(id: number, raise = false) {
+    if (!raise) return;
+    // Floating overlays are stacked by zIndex on the local canvas.
+    const win = windowById(id);
+    if (win) send({ type: "patch", id, patch: { zIndex: ++topZ } });
+  }
+
+  /** Return the window id of the currently focused tiled pane. */
+  function activeTiledPane(): number {
+    return tiledFocusId;
+  }
+
+  function tiledActionTable(): ActionTable {
+    return {
+      focus_left: () => moveTiledFocus("left"),
+      focus_right: () => moveTiledFocus("right"),
+      focus_up: () => moveTiledFocus("up"),
+      focus_down: () => moveTiledFocus("down"),
+      swap_left: () => swapTiled("left"),
+      swap_right: () => swapTiled("right"),
+      swap_up: () => swapTiled("up"),
+      swap_down: () => swapTiled("down"),
+      toggle_split: () => toggleTiledSplit(),
+      close: () => { const p = activeTiledPane(); if (p >= 0) closeWindow(p); },
+      cycle_focus_next: () => moveTiledFocus("right"),
+    };
+  }
+
+  function moveTiledFocus(dir: "left" | "right" | "up" | "down") {
+    const current = activeTiledPane();
+    if (current < 0 || !tileTree) return;
+    const id = neighborPane(tileTree, current, dir);
+    if (id == null) return;
+    tiledFocusId = id;
+    focusedWindowID = id;
+    if (isFloatedTile(id)) focusFloatedOverlay(id, true);
+  }
+
+  function swapTiled(dir: "left" | "right" | "up" | "down") {
+    if (!tileTree) return;
+    const current = activeTiledPane();
+    if (current < 0) return;
+    const next = moveWindowDirection(tileTree, current, dir);
+    if (next !== tileTree) {
+      tileTree = next;
+      persistTiledLayout();
+    }
+    tiledFocusId = current;
+    focusedWindowID = current;
+  }
+
+  function toggleTiledSplit() {
+    if (!tileTree) return;
+    const current = activeTiledPane();
+    if (current < 0) {
+      tileTree = toggleSplitAxis(tileTree, leafOrder(tileTree)[0] ?? current);
+      persistTiledLayout();
+      return;
+    }
+    tileTree = toggleSplitAxis(tileTree, current);
+    if (tileTree) syncTileTree(tileLeaves(tileTree));
+    persistTiledLayout();
+  }
+
+  /** Which tiled window sits under a screen point (hit-testing the pane boxes). */
+  function windowAtTiled(clientX: number, clientY: number, exclude: number): number | null {
+    if (!fabricEl) return null;
+    const rect = fabricEl.getBoundingClientRect();
+    const worldX = (clientX - rect.left - viewportX) / zoom;
+    const worldY = (clientY - rect.top - viewportY) / zoom;
+    const win = displayWindows.find(
+      (w) => w.id !== exclude && worldX >= w.x && worldX <= w.x + w.width && worldY >= w.y && worldY <= w.y + w.height,
+    );
+    return win ? win.id : null;
   }
 
   function startMove(id: number, event: PointerEvent) {
+    // Window title bars initiate normal floating drags only. Tiled reordering is
+    // deliberately Ctrl+drag from anywhere inside a pane (see document handlers).
     if (workspaceMode === "tiled") return;
     event.preventDefault();
     focusWindow(id);
@@ -643,6 +844,84 @@
     movingWindowID = id;
     movingStart = [event.clientX, event.clientY];
     movingOrigin = [win.x, win.y];
+  }
+
+  function beginTiledReorder(id: number, event: PointerEvent) {
+    const pane = displayWindows.find((windowState) => windowState.id === id);
+    if (!pane) return;
+    tiledReorderDrag = {
+      windowId: id,
+      width: pane.width,
+      height: pane.height,
+      originX: pane.x,
+      originY: pane.y,
+      downX: event.clientX,
+      downY: event.clientY,
+      ghostX: pane.x,
+      ghostY: pane.y,
+      lastTarget: null,
+      didReorder: false,
+      targets: displayWindows
+        .filter((windowState) => windowState.id !== id)
+        .map(({ id: windowId, x, y, width, height }) => ({ windowId, x, y, width, height })),
+    };
+    tiledReorderPotential = null;
+  }
+
+  function moveTiledReorder(event: PointerEvent) {
+    if (tiledReorderPotential && !tiledReorderDrag) {
+      const { downX, downY, windowId } = tiledReorderPotential;
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) > TILED_DRAG_THRESHOLD) {
+        beginTiledReorder(windowId, event);
+      }
+    }
+    if (!tiledReorderDrag || !fabricEl) return;
+    const drag = tiledReorderDrag;
+    const ghostX = Math.round(drag.originX + (event.clientX - drag.downX) / zoom);
+    const ghostY = Math.round(drag.originY + (event.clientY - drag.downY) / zoom);
+    const rect = fabricEl.getBoundingClientRect();
+    const worldX = (event.clientX - rect.left - viewportX) / zoom;
+    const worldY = (event.clientY - rect.top - viewportY) / zoom;
+    const target = drag.targets.find(({ x, y, width, height }) => worldX >= x && worldX <= x + width && worldY >= y && worldY <= y + height)?.windowId ?? null;
+
+    // Swap immediately when crossing a pane. Updating the shared tree only on
+    // drop avoids broadcasting an intermediate layout on every pointer frame.
+    if (target && target !== drag.lastTarget && tileTree) {
+      tileTree = swapLeaves(tileTree, drag.windowId, target);
+    }
+    tiledReorderDrag = { ...drag, ghostX, ghostY, lastTarget: target, didReorder: drag.didReorder || target !== null };
+  }
+
+  function finishTiledReorder() {
+    const dragged = tiledReorderDrag;
+    tiledReorderPotential = null;
+    tiledReorderDrag = null;
+    if (dragged?.didReorder) {
+      persistTiledLayout();
+      void applyTiledLayout();
+    }
+  }
+
+  function handleTiledReorderPointerDown(event: PointerEvent) {
+    if (workspaceMode !== "tiled" || !ctrlModifierHeld || event.button !== 0 || tiledReorderDrag) return;
+    const target = event.target as HTMLElement | null;
+    const pane = target?.closest("[data-tile-pane]") as HTMLElement | null;
+    if (!pane) return;
+    const windowId = Number(pane.dataset.tilePane);
+    if (!Number.isInteger(windowId)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    tiledFocusId = windowId;
+    focusedWindowID = windowId;
+    tiledReorderPotential = { windowId, downX: event.clientX, downY: event.clientY };
+  }
+
+  function handleTiledReorderPointerMove(event: PointerEvent) {
+    moveTiledReorder(event);
+  }
+
+  function handleTiledReorderPointerUp() {
+    finishTiledReorder();
   }
 
   function startResize(id: number, event: PointerEvent, width: number, height: number) {
@@ -854,6 +1133,7 @@
     }
 
     if (movingWindowID !== -1) {
+      movingPointerPos = { clientX: event.clientX, clientY: event.clientY };
       const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
       const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
       windows = windows.map((w) => (w.id === movingWindowID ? { ...w, x, y } : w));
@@ -928,8 +1208,21 @@
       resizingWindowID = -1;
     }
     if (movingWindowID !== -1) {
-      const win = windowById(movingWindowID);
-      if (win) send({ type: "patch", id: win.id, patch: { x: win.x, y: win.y } });
+      // In tiled mode, swap window positions based on drop target
+      if (workspaceMode === "tiled" && tileTree) {
+        const targetWin = windowAtTiled(movingPointerPos.clientX, movingPointerPos.clientY, movingWindowID);
+        if (targetWin && targetWin !== movingWindowID) {
+          // Swap the dragged window with the target window in the tile tree
+          tileTree = swapLeaves(tileTree, movingWindowID, targetWin);
+          persistTiledLayout();
+        }
+        // Reset the window position back to its tiled position
+        // (it was temporarily moved during drag for visual feedback)
+        void applyTiledLayout();
+      } else {
+        const win = windowById(movingWindowID);
+        if (win) send({ type: "patch", id: win.id, patch: { x: win.x, y: win.y } });
+      }
       movingWindowID = -1;
     }
   }
@@ -938,11 +1231,105 @@
   // workspace handles pinch itself, so suppress the browser's version.
   const preventPageGesture = (event: Event) => event.preventDefault();
 
+  // -------------------------------------------------------------------------
+  // Tiled keybind + Ctrl+drag wiring (Hyprland-style key/mouse coordination)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Capture-phase key handler. In tiled mode it primes the Ctrl modifier state
+   * and consumes Chord+tile actions before they reach the focused terminal or
+   * editor, mirroring Hyprland grabbing binds above applications.
+   */
+  function handleTilingKeydown(event: KeyboardEvent) {
+    if (event.key === "Control") {
+      ctrlModifierHeld = true;
+      return;
+    }
+    if (!ctrlModifierHeld) return;
+
+    // Handle Ctrl+Q in both floating and tiled modes to close focused window
+    if ((event.key === "q" || event.key === "Q") && workspaceMode === "floating") {
+      if (focusedWindowID >= 0) {
+        closeWindow(focusedWindowID);
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+
+    if (workspaceMode !== "tiled") return;
+
+    // Reserve Ctrl+Q / Ctrl+` / direction chords for window management even
+    // when a terminal is focused.
+    const consumed = handleTilingKey(
+      { key: event.key, shift: event.shiftKey },
+      true,
+      tiledActionTable(),
+    );
+    if (consumed) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }
+
+  function handleTilingKeyup(event: KeyboardEvent) {
+    if (event.key === "Control") ctrlModifierHeld = false;
+  }
+
   onMount(() => {
     refreshShapes();
     drawingShapes.observe(refreshShapes);
+    // Restore the user's floating/tiled toggle from local storage.
+    workspaceMode = localStorage.getItem("sshx-workspace-mode") === "tiled" ? "tiled" : "floating";
+    // Adopt the room-wide tiled layout: whatever panes/ratios are shared by the
+    // collaborators becomes this browser's layout too, and any remote change is
+    // applied live. Local edits publish through persistTiledLayout() instead.
+    // Note: we don't initialize tileTree from getSharedTileTree() here because
+    // the Yjs data might contain stale window IDs. syncTileTree will build the
+    // correct tree from the current windows list.
+    floatedTileIds = getSharedFloated();
+    unobserveTiledLayout = observeTileLayout((nextTree, nextFloated) => {
+      // Only adopt remote layout if there is actual data AND the tree's window IDs
+      // match our current windows. Otherwise, syncTileTree will build the correct tree.
+      if (nextTree !== null) {
+        const treeWindowIds = tileLeaves(nextTree);
+        const currentWindowIds = new Set(windows.map(w => w.id));
+        const allMatch = treeWindowIds.every(id => currentWindowIds.has(id));
+        if (allMatch) {
+          tileTree = nextTree;
+        }
+      }
+      floatedTileIds = nextFloated;
+      if (workspaceMode === "tiled") {
+        if (fabricEl) {
+          const rect = fabricEl.getBoundingClientRect();
+          tiledViewport = { width: rect.width, height: rect.height };
+        }
+        void applyTiledLayout();
+      }
+    });
+    // If the restored mode is tiled, lay out the tiles against the actual
+    // viewport once the panel is mounted.
+    if (workspaceMode === "tiled") {
+      if (fabricEl) {
+        const rect = fabricEl.getBoundingClientRect();
+        tiledViewport = { width: rect.width, height: rect.height };
+      }
+      // Set the canvas transform to the tiled-mode defaults (origin at 0,0, zoom 1)
+      // just like setWorkspaceMode("tiled") does.
+      viewportX = 0;
+      viewportY = 0;
+      zoom = 1;
+      void tick().then(() => void applyTiledLayout());
+    }
     document.addEventListener("gesturestart", preventPageGesture);
     document.addEventListener("gesturechange", preventPageGesture);
+    document.addEventListener("keydown", handleTilingKeydown, true);
+    document.addEventListener("keyup", handleTilingKeyup, true);
+    document.addEventListener("pointerdown", handleTiledReorderPointerDown, true);
+    document.addEventListener("pointermove", handleTiledReorderPointerMove);
+    document.addEventListener("pointerup", handleTiledReorderPointerUp);
+    document.addEventListener("pointercancel", handleTiledReorderPointerUp);
     collabConn = new CollabConnection((status) => {
       collabStatus = status;
       if (status === "auth-failed") {
@@ -971,7 +1358,14 @@
     window.clearTimeout(reconnectTimer);
     document.removeEventListener("gesturestart", preventPageGesture);
     document.removeEventListener("gesturechange", preventPageGesture);
+    document.removeEventListener("keydown", handleTilingKeydown, true);
+    document.removeEventListener("keyup", handleTilingKeyup, true);
+    document.removeEventListener("pointerdown", handleTiledReorderPointerDown, true);
+    document.removeEventListener("pointermove", handleTiledReorderPointerMove);
+    document.removeEventListener("pointerup", handleTiledReorderPointerUp);
+    document.removeEventListener("pointercancel", handleTiledReorderPointerUp);
     drawingShapes.unobserve(refreshShapes);
+    unobserveTiledLayout?.();
     collabConn?.destroy();
     socket?.close();
   });
@@ -1056,6 +1450,7 @@
           focused={focusedWindowID === windowState.id}
           tiled={workspaceMode === "tiled"}
           {layoutAnimating}
+          tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
           onFocus={(id) => focusWindow(id)}
           onBlur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
           onStartMove={(id, event) => startMove(id, event)}
@@ -1074,6 +1469,7 @@
           focused={focusedWindowID === windowState.id}
           tiled={workspaceMode === "tiled"}
           {layoutAnimating}
+          tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
           onFocus={(id) => focusWindow(id)}
           onStartMove={(id, event) => startMove(id, event)}
           onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
@@ -1082,21 +1478,44 @@
       {/if}
     {/each}
 
-    {#if workspaceMode === "tiled" && splittersVisible}
-      {#each tileSplits as split (split.id)}
-        <div
-          class="tile-splitter"
-          class:tile-splitter-column={split.axis === "vertical"}
-          class:tile-splitter-row={split.axis === "horizontal"}
-          data-no-pan
-          role="separator"
-          aria-label={split.axis === "vertical" ? "Resize tiled columns" : "Resize tiled rows"}
-          aria-orientation={split.axis === "vertical" ? "vertical" : "horizontal"}
-          style={split.axis === "vertical"
-            ? `left: ${split.x}px; top: ${split.y}px; height: ${Math.max(1, split.height)}px;`
-            : `left: ${split.x}px; top: ${split.y}px; width: ${Math.max(1, split.width)}px;`}
-          on:pointerdown={(event) => startTileSplit(split.id, event)}
-        ></div>
+    {#if workspaceMode === "tiled"}
+      <!-- Floated-out tiles render as real floating windows above the grid. -->
+      {#each floatedOverlays as windowState (windowState.id)}
+        {#if windowState.kind === "shell"}
+          <WebTerm
+            bind:this={termRefs[windowState.id]}
+            shell={windowState}
+            output={outputs[windowState.id] ?? ""}
+            zIndex={windowState.zIndex ?? 1}
+            focused={focusedWindowID === windowState.id}
+            tiled={false}
+            {layoutAnimating}
+            tilePaneId={null}
+            onFocus={(id) => focusWindow(id)}
+            onBlur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
+            onStartMove={(id, event) => startMove(id, event)}
+            onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+            onInput={(id, data) => send({ type: "input", id, data })}
+            onResize={(id, cols, rows, width, height) => {
+              windows = windows.map((w) => w.id === id ? { ...w, cols, rows, width, height } : w);
+              send({ type: "patch", id, patch: { cols, rows, width, height } });
+            }}
+            onClose={(id) => closeWindow(id)}
+          />
+        {:else}
+          <EditorWindow
+            {windowState}
+            zIndex={windowState.zIndex ?? 1}
+            focused={focusedWindowID === windowState.id}
+            tiled={false}
+            {layoutAnimating}
+            tilePaneId={null}
+            onFocus={(id) => focusWindow(id)}
+            onStartMove={(id, event) => startMove(id, event)}
+            onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+            onClose={(id) => closeWindow(id)}
+          />
+        {/if}
       {/each}
     {/if}
 

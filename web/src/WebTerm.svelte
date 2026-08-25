@@ -16,6 +16,7 @@
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let tilePaneId: number | null = null;
   export let onInput: (id: number, data: string) => void = () => {};
   export let onResize: (id: number, cols: number, rows: number, width: number, height: number) => void = () => {};
   export let onClose: (id: number) => void = () => {};
@@ -231,6 +232,7 @@
   background={theme.background}
   ariaLabel={currentTitle}
   resizeLabel="Resize terminal"
+  tilePaneId={tilePaneId ?? null}
   onClose={(id) => onClose(id)}
   onYellow={() => terminal?.blur()}
   onGreen={() => fitAndReport(true)}

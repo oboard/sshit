@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
+  import { afterUpdate, beforeUpdate, onDestroy } from "svelte";
   import { animate } from "motion";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
@@ -18,6 +18,7 @@
   export let resizeLabel = `Resize ${title}`;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let tilePaneId: number | null = null;
   export let onClose: (id: number) => void = () => {};
   export let onYellow: (id: number) => void = () => {};
   export let onGreen: (id: number) => void = () => {};
@@ -25,72 +26,80 @@
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
 
-  let previousTiled = tiled;
-  let chromeVisible = true;
-  let chromeEl: HTMLDivElement;
-  let chromeTimer: number | undefined;
-  let chromeAnimation: { stop: () => void } | undefined;
+  let frameEl: HTMLDivElement;
+  let contentEl: HTMLDivElement;
+  let beforeRect: DOMRect | null = null;
+  let flipAnimation: { stop: () => void } | undefined;
 
-  async function transitionChrome(nextTiled: boolean) {
-    chromeAnimation?.stop();
-    window.clearTimeout(chromeTimer);
-    chromeVisible = true;
-    await tick();
-    if (!chromeEl) return;
+  // The dragged frame follows the cursor directly. All other tiled frames use
+  // Motion's FLIP transform so they glide into the slots they are reordered to.
+  $: isDraggedTile = tiled && zIndex >= 1000;
 
-    if (nextTiled) {
-      chromeAnimation = animate(
-        chromeEl,
-        { opacity: [1, 0], height: [42, 0], transform: ["translateY(0)", "translateY(-10px)"] },
-        { duration: 0.48, ease: [0.16, 1, 0.3, 1] },
-      );
-      chromeTimer = window.setTimeout(() => (chromeVisible = false), 480);
+  beforeUpdate(() => {
+    if (tiled && !layoutAnimating && !isDraggedTile && frameEl) {
+      beforeRect = frameEl.getBoundingClientRect();
     } else {
-      chromeAnimation = animate(
-        chromeEl,
-        { opacity: [0, 1], height: [0, 42], transform: ["translateY(-10px)", "translateY(0)"] },
-        { duration: 0.48, ease: [0.16, 1, 0.3, 1] },
-      );
+      beforeRect = null;
     }
-  }
-
-  // Keep the title bar mounted long enough for Motion to animate it away.
-  $: if (tiled !== previousTiled) {
-    previousTiled = tiled;
-    void transitionChrome(tiled);
-  }
-
-  onDestroy(() => {
-    window.clearTimeout(chromeTimer);
-    chromeAnimation?.stop();
   });
+
+  afterUpdate(() => {
+    // Mode changes already animate the outer coordinate transform. Clearing the
+    // FLIP baseline here prevents an extra scale animation when that transition
+    // finishes and `layoutAnimating` becomes false.
+    if (!tiled || layoutAnimating || isDraggedTile || !frameEl || !contentEl) {
+      beforeRect = null;
+      return;
+    }
+    const before = beforeRect;
+    const after = frameEl.getBoundingClientRect();
+    beforeRect = null;
+    if (!before) return;
+    const deltaX = before.left - after.left;
+    const deltaY = before.top - after.top;
+    const scaleX = before.width / after.width;
+    const scaleY = before.height / after.height;
+    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5 && Math.abs(scaleX - 1) < 0.005 && Math.abs(scaleY - 1) < 0.005) return;
+    flipAnimation?.stop();
+    flipAnimation = animate(
+      contentEl,
+      { transform: [`translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, "translate(0px, 0px) scale(1, 1)"] },
+      { duration: 0.32, ease: [0.16, 1, 0.3, 1] },
+    );
+  });
+
+  onDestroy(() => flipAnimation?.stop());
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
-  class="window-frame absolute inline-block select-none rounded-xl border border-white/10 opacity-90 shadow-2xl transition-[opacity,box-shadow] duration-200"
-  class:tile-animating={layoutAnimating}
-  class:frameless={tiled}
-  class:focused
-  class:tiled
-  class:interacting={focused}
-  style="transform: translate({x}px, {y}px); z-index: {zIndex}; background: {background};"
+  bind:this={frameEl}
+  class="window-frame absolute inline-block select-none"
+  class:mode-animating={layoutAnimating}
+  style="transform: translate({x}px, {y}px); z-index: {zIndex};"
   data-no-pan
+  data-tile-pane={tilePaneId ?? undefined}
   role="group"
   aria-label={ariaLabel}
   on:pointerdown|stopPropagation={() => onFocus(id)}
   on:wheel|stopPropagation
 >
-  {#if chromeVisible}
+  <div
+    bind:this={contentEl}
+    class="window-content rounded-xl border border-white/10 opacity-90 shadow-2xl transition-[opacity,box-shadow] duration-200"
+    class:focused
+    class:interacting={focused}
+    style="background: {background};"
+  >
+  {#if !tiled}
     <!-- touch-action: none keeps the browser from stealing window drags. -->
     <div
-      bind:this={chromeEl}
       class="flex cursor-move select-none items-center overflow-hidden"
       style="touch-action: none;"
       role="toolbar"
       tabindex="-1"
       aria-label="{title} window controls"
-      on:pointerdown|stopPropagation={(event) => { if (!tiled) onStartMove(id, event); }}
+      on:pointerdown|stopPropagation={(event) => onStartMove(id, event)}
     >
       <div class="flex flex-1 items-center px-3">
         <CircleButtons>
@@ -108,21 +117,25 @@
 
   <slot />
 
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
-    class:invisible={tiled}
-    style="touch-action: none;"
-    role="separator"
-    aria-label={resizeLabel}
-    title={resizeLabel}
-    on:pointerdown|stopPropagation={(event) => onStartResize(id, event, width, height)}
-  ></div>
+  {#if !tiled}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
+      style="touch-action: none;"
+      role="separator"
+      aria-label={resizeLabel}
+      title={resizeLabel}
+      on:pointerdown|stopPropagation={(event) => onStartResize(id, event, width, height)}
+    ></div>
+  {/if}
+  </div>
 </div>
 
 <style lang="postcss">
-  .window-frame {
+  .window-content {
     box-shadow: 0 20px 45px rgb(0 0 0 / 0.28), inset 0 1px rgb(255 255 255 / 0.05);
+    transform-origin: top left;
+    will-change: transform;
   }
 
   .focused {
@@ -130,13 +143,12 @@
     box-shadow: 0 0 0 1px rgb(34 211 238 / 0.18), 0 22px 54px rgb(0 0 0 / 0.38), 0 0 34px rgb(34 211 238 / 0.1);
   }
 
-  /* Window coordinates update continuously during a drag. Never transition
-     transform: otherwise each update chases the pointer and feels viscous. */
+  /* Normal drags update coordinates continuously; only workspace-mode changes
+     transition the outer position. Ctrl-reorder uses Motion on the inner layer. */
   .interacting { transition-property: opacity, box-shadow; }
-  .tiled { @apply rounded-none; }
-  .frameless { border-color: transparent; box-shadow: none; }
-  .tile-animating { transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1); }
-
+  .mode-animating {
+    transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1);
+  }
 
   .resize-handle {
     cursor: se-resize;

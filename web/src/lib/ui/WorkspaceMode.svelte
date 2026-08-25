@@ -48,7 +48,7 @@
       on:click={() => setMode("floating")}
     >
       <LayersIcon size="15" strokeWidth="1.9" />
-      <span>浮动</span>
+      <span>自由</span>
     </button>
     <button
       bind:this={tiledButton}
