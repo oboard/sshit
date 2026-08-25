@@ -26,6 +26,7 @@
   export let onTiledResize: (id: number, cols: number, rows: number) => void = () => {};
   export let onFocus: (id: number) => void = () => {};
   export let onBlur: (id: number) => void = () => {};
+  export let onTitleChange: (id: number, title: string) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
   let termEl: HTMLDivElement;
@@ -227,7 +228,11 @@
       terminalResizeObserver = new ResizeObserver(scheduleTerminalFit);
       terminalResizeObserver.observe(termEl);
       terminalReady = true;
-      terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
+      terminal.onTitleChange((title) => {
+        currentTitle = title || "sshit shell";
+        onTitleChange(shell.id, currentTitle);
+      });
+      onTitleChange(shell.id, currentTitle);
       terminal.onData((data) => onInput(shell.id, data));
       // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
       // available after open(), so use native focus events instead.

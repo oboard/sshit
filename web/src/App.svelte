@@ -12,7 +12,6 @@
   import Settings from "$lib/ui/Settings.svelte";
   import ToastContainer from "$lib/ui/ToastContainer.svelte";
   import Toolbar from "$lib/ui/Toolbar.svelte";
-  import WorkspaceMode from "$lib/ui/WorkspaceMode.svelte";
   import { CollabConnection, type CollabStatus } from "$lib/collab";
   import { makeToast } from "$lib/toast";
   import { settings } from "$lib/settings";
@@ -85,6 +84,7 @@
   let showNetworkInfo = false;
   let focusedWindowID = -1;
   let workspaceMode: "floating" | "tiled" = "floating";
+  let shellTitles: Record<number, string> = {};
   let tiledViewport = { width: 0, height: 0 };
   type TileSplit = {
     id: string;
@@ -274,8 +274,22 @@
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
 
+  $: focusedWindow = focusedWindowID >= 0 ? windowById(focusedWindowID) : undefined;
+  $: toolbarTitle = focusedWindow
+    ? focusedWindow.kind === "shell"
+      ? shellTitles[focusedWindow.id] ?? "sshit shell"
+      : "Markdown Editor"
+    : "workspace";
+
   function windowById(id: number) {
     return windows.find((w) => w.id === id);
+  }
+
+  function handleShellTitleChange(id: number, title: string) {
+    shellTitles = {
+      ...shellTitles,
+      [id]: title,
+    };
   }
 
   function isShell(id: number) {
@@ -1742,40 +1756,34 @@
   on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
-  <div class="absolute top-4 left-4 z-[12000]">
+  <div class="absolute inset-x-4 top-4 z-[12000] flex flex-col gap-3 sm:left-4 sm:right-4">
     <Toolbar
       {connected}
       hasWriteAccess={true}
       {drawingMode}
+      {workspaceMode}
+      title={toolbarTitle}
       onCreate={createShell}
       onCreateEditor={createEditorWindow}
       onToggleDrawing={() => (drawingMode = !drawingMode)}
-      onSettings={() => (settingsOpen = true)}
+      onToggleWorkspaceMode={() =>
+        setWorkspaceMode(workspaceMode === "floating" ? "tiled" : "floating")}
+      onSettings={() => (settingsOpen = !settingsOpen)}
       onNetworkInfo={() => (showNetworkInfo = !showNetworkInfo)}
     />
-  </div>
 
-  <div class="absolute top-4 right-4 z-[10000] flex items-start gap-3">
-    <div class="relative">
-      <WorkspaceMode
-        mode={workspaceMode}
-        onChange={(mode) => setWorkspaceMode(mode)}
-      />
+    <div class="flex justify-end sm:hidden">
+      <Avatars users={usersForUI} />
     </div>
-    <div class="flex items-center gap-3 pt-1">
-      <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
-      <div class="hidden sm:block">
-        <NameList users={usersForUI} />
-      </div>
-      <div class="block sm:hidden">
-        <Avatars users={usersForUI} />
-      </div>
+
+    <div class="hidden justify-end sm:flex">
+      <NameList users={usersForUI} />
     </div>
   </div>
 
   {#if showNetworkInfo}
     <div
-      class="absolute top-24 left-4 z-[10000] w-[360px] max-w-[calc(100vw-2rem)]"
+      class="absolute top-[6.5rem] left-4 z-[10000] w-[360px] max-w-[calc(100vw-2rem)] sm:top-24"
     >
       <NetworkInfo
         status={connected ? "connected" : "no-server"}
@@ -1831,6 +1839,7 @@
             onStartResize={(id, event, width, height) =>
               startResize(id, event, width, height)}
             onTiledResize={reportTiledPtyResize}
+            onTitleChange={handleShellTitleChange}
             onInput={(id, data) => send({ type: "input", id, data })}
             onResize={(id, cols, rows, width, height) => {
               windows = windows.map((w) =>
@@ -1897,6 +1906,7 @@
               onStartMove={(id, event) => startMove(id, event)}
               onStartResize={(id, event, width, height) =>
                 startResize(id, event, width, height)}
+              onTitleChange={handleShellTitleChange}
               onInput={(id, data) => send({ type: "input", id, data })}
               onResize={(id, cols, rows, width, height) => {
                 windows = windows.map((w) =>

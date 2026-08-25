@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { createEventDispatcher } from "svelte";
   import { ChevronDownIcon } from "svelte-feather-icons";
 
   import { settings, updateSettings } from "$lib/settings";
@@ -6,6 +7,8 @@
   import themes, { type ThemeName } from "./themes";
 
   export let open: boolean;
+
+  const dispatch = createEventDispatcher<{ close: void }>();
 
   let inputName: string;
   let inputTheme: ThemeName;
@@ -26,6 +29,7 @@
   description="Customize your collaborative terminal."
   showCloseButton
   {open}
+  onClose={() => dispatch("close")}
 >
   <div class="flex flex-col gap-4">
     <div

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
   import { animate, stagger } from "motion";
-  import { GridIcon, LayersIcon, MousePointerIcon } from "svelte-feather-icons";
+  import { GridIcon, LayersIcon } from "svelte-feather-icons";
 
   export let mode: "floating" | "tiled" = "floating";
   export let onChange: (mode: "floating" | "tiled") => void = () => {};
