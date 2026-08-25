@@ -35,7 +35,7 @@
 <script lang="ts">
   import { browser } from "$app/environment";
 
-  import { createEventDispatcher, onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import type { Terminal } from "@xterm/xterm";
   import { Buffer } from "buffer";
 
@@ -48,23 +48,20 @@
   /** Used to determine Cmd versus Ctrl keyboard shortcuts. */
   const isMac = browser && navigator.platform.startsWith("Mac");
 
-  const dispatch = createEventDispatcher<{
-    data: Uint8Array;
-    close: void;
-    shrink: void;
-    expand: void;
-    bringToFront: void;
-    startMove: MouseEvent;
-    focus: void;
-    blur: void;
-  }>();
-
   const typeahead = new TypeAheadAddon();
 
   export let rows: number, cols: number;
   export let write: (data: string) => void; // bound function prop
 
   export let termEl: HTMLDivElement = null as any; // suppress "missing prop" warning
+  export let onData: (data: Uint8Array) => void = () => {};
+  export let onClose: () => void = () => {};
+  export let onShrink: () => void = () => {};
+  export let onExpand: () => void = () => {};
+  export let onBringToFront: () => void = () => {};
+  export let onStartMove: (event: MouseEvent) => void = () => {};
+  export let onFocus: () => void = () => {};
+  export let onBlur: () => void = () => {};
   let term: Terminal | null = null;
 
   $: theme = themes[$settings.theme];
@@ -95,11 +92,11 @@
     if (isFocused && !focused) {
       focused = isFocused;
       cursorLayer.removeEventListener("wheel", handleWheelSkipXTerm);
-      dispatch("focus");
+      onFocus();
     } else if (!isFocused && focused) {
       focused = isFocused;
       cursorLayer.addEventListener("wheel", handleWheelSkipXTerm);
-      dispatch("blur");
+      onBlur();
     }
   }
 
@@ -150,13 +147,13 @@
         (!isMac && !event.metaKey && event.ctrlKey && !event.altKey)
       ) {
         if (event.key === "ArrowLeft") {
-          dispatch("data", new Uint8Array([0x01]));
+          onData(new Uint8Array([0x01]));
           return false;
         } else if (event.key === "ArrowRight") {
-          dispatch("data", new Uint8Array([0x05]));
+          onData(new Uint8Array([0x05]));
           return false;
         } else if (event.key === "Backspace") {
-          dispatch("data", new Uint8Array([0x15]));
+          onData(new Uint8Array([0x15]));
           return false;
         }
       }
@@ -204,10 +201,10 @@
 
     const utf8 = new TextEncoder();
     term.onData((data: string) => {
-      dispatch("data", utf8.encode(data));
+      onData(utf8.encode(data));
     });
     term.onBinary((data: string) => {
-      dispatch("data", Buffer.from(data, "binary"));
+      onData(Buffer.from(data, "binary"));
     });
   });
 
@@ -218,12 +215,12 @@
   class="term-container inline-block rounded-lg border border-zinc-700 opacity-90 transition-[transform,opacity] duration-200"
   class:focused
   style:background={theme.background}
-  on:mousedown={() => dispatch("bringToFront")}
+  on:mousedown={() => onBringToFront()}
   on:pointerdown={(event) => event.stopPropagation()}
 >
   <div
     class="flex select-none"
-    on:mousedown={(event) => dispatch("startMove", event)}
+    on:mousedown={(event) => onStartMove(event)}
   >
     <div class="flex-1 flex items-center px-3">
       <CircleButtons>
@@ -233,15 +230,15 @@
         -->
         <CircleButton
           kind="red"
-          on:mousedown={(event) => event.button === 0 && dispatch("close")}
+          on:mousedown={(event) => event.button === 0 && onClose()}
         />
         <CircleButton
           kind="yellow"
-          on:mousedown={(event) => event.button === 0 && dispatch("shrink")}
+          on:mousedown={(event) => event.button === 0 && onShrink()}
         />
         <CircleButton
           kind="green"
-          on:mousedown={(event) => event.button === 0 && dispatch("expand")}
+          on:mousedown={(event) => event.button === 0 && onExpand()}
         />
       </CircleButtons>
     </div>

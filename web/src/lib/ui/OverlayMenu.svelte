@@ -1,15 +1,13 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import { fade, scale } from "svelte/transition";
   import { XIcon } from "svelte-feather-icons";
-
-  const dispatch = createEventDispatcher<{ close: void }>();
 
   export let title: string;
   export let description: string;
   export let showCloseButton = false;
   export let maxWidth: number = 768; // screen-md
   export let open: boolean;
+  export let onClose: () => void = () => {};
 </script>
 
 {#if open}
@@ -24,7 +22,7 @@
       class="fixed inset-0 -z-10 cursor-default bg-black/20 backdrop-blur-sm"
       aria-label="Close dialog"
       type="button"
-      on:click={() => dispatch("close")}
+      on:click={onClose}
       transition:fade={{ duration: 150 }}
     ></button>
 
@@ -41,7 +39,7 @@
           <button
             class="absolute top-4 right-4 p-1 rounded hover:bg-zinc-700 active:bg-indigo-700 transition-colors"
             aria-label="Close {title}"
-            on:click={() => dispatch("close")}
+            on:click={onClose}
             type="button"
           >
             <XIcon class="h-5 w-5" />

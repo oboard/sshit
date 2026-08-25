@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import {
     FileTextIcon,
     PenToolIcon,
@@ -11,14 +10,11 @@
   export let connected: boolean;
   export let hasWriteAccess: boolean | undefined;
   export let drawingMode = false;
-
-  const dispatch = createEventDispatcher<{
-    create: void;
-    createEditor: void;
-    toggleDrawing: void;
-    settings: void;
-    networkInfo: void;
-  }>();
+  export let onCreate: () => void = () => {};
+  export let onCreateEditor: () => void = () => {};
+  export let onToggleDrawing: () => void = () => {};
+  export let onSettings: () => void = () => {};
+  export let onNetworkInfo: () => void = () => {};
 </script>
 
 <div class="panel toolbar inline-block px-3 py-2">
@@ -32,7 +28,7 @@
     <div class="flex space-x-1">
       <button
         class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700 disabled:bg-transparent disabled:opacity-50"
-        on:click={() => dispatch("create")}
+        on:click={onCreate}
         disabled={!connected || !hasWriteAccess}
         title={!connected
           ? "Not connected"
@@ -42,13 +38,13 @@
       >
         <PlusCircleIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("createEditor")} title="Create Markdown editor window">
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onCreateEditor} title="Create Markdown editor window">
         <FileTextIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="icon-button" class:active={drawingMode} on:click={() => dispatch("toggleDrawing")} title={drawingMode ? "Switch to pointer mode" : "Switch to drawing mode"}>
+      <button class="icon-button" class:active={drawingMode} on:click={onToggleDrawing} title={drawingMode ? "Switch to pointer mode" : "Switch to drawing mode"}>
         <PenToolIcon strokeWidth={1.5} class="p-0.5" />
       </button>
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("settings")}>
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onSettings}>
         <SettingsIcon strokeWidth={1.5} class="p-0.5" />
       </button>
     </div>
@@ -56,7 +52,7 @@
     <div class="mx-2 h-5 border-l-4 border-zinc-800"></div>
 
     <div class="flex space-x-1">
-      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={() => dispatch("networkInfo")}>
+      <button class="relative rounded-md p-1 transition-colors hover:bg-zinc-700 active:bg-indigo-700" on:click={onNetworkInfo}>
         <WifiIcon strokeWidth={1.5} class="p-0.5" />
       </button>
     </div>

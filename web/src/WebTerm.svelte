@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import type { FitAddon } from "@xterm/addon-fit";
   import type { Terminal } from "@xterm/xterm";
 
@@ -16,16 +16,13 @@
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
-
-  const dispatch = createEventDispatcher<{
-    input: { id: number; data: string };
-    resize: { id: number; cols: number; rows: number; width: number; height: number };
-    close: { id: number };
-    startMove: { id: number; event: PointerEvent };
-    startResize: { id: number; event: PointerEvent; width: number; height: number };
-    focus: { id: number };
-    blur: { id: number };
-  }>();
+  export let onInput: (id: number, data: string) => void = () => {};
+  export let onResize: (id: number, cols: number, rows: number, width: number, height: number) => void = () => {};
+  export let onClose: (id: number) => void = () => {};
+  export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
+  export let onFocus: (id: number) => void = () => {};
+  export let onBlur: (id: number) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
   let termEl: HTMLDivElement;
@@ -57,13 +54,13 @@
     if (!terminal || !fitAddon || !termEl) return;
     fitAddon.fit();
     if (report && (terminal.cols !== shell.cols || terminal.rows !== shell.rows)) {
-      dispatch("resize", {
-        id: shell.id,
-        cols: terminal.cols,
-        rows: terminal.rows,
-        width: Math.round(shell.width || termEl.offsetWidth),
-        height: Math.round(shell.height || termEl.offsetHeight),
-      });
+      onResize(
+        shell.id,
+        terminal.cols,
+        terminal.rows,
+        Math.round(shell.width || termEl.offsetWidth),
+        Math.round(shell.height || termEl.offsetHeight),
+      );
     }
   }
 
@@ -175,15 +172,15 @@
           (!isMac && !event.metaKey && event.ctrlKey && !event.altKey)
         ) {
           if (event.key === "ArrowLeft") {
-            dispatch("input", { id: shell.id, data: "\u0001" });
+            onInput(shell.id, "\u0001");
             return false;
           }
           if (event.key === "ArrowRight") {
-            dispatch("input", { id: shell.id, data: "\u0005" });
+            onInput(shell.id, "\u0005");
             return false;
           }
           if (event.key === "Backspace") {
-            dispatch("input", { id: shell.id, data: "\u0015" });
+            onInput(shell.id, "\u0015");
             return false;
           }
         }
@@ -193,11 +190,11 @@
       installScaledMouseCoordinateFix();
       terminalReady = true;
       terminal.onTitleChange((title) => (currentTitle = title || "sshit shell"));
-      terminal.onData((data) => dispatch("input", { id: shell.id, data }));
+      terminal.onData((data) => onInput(shell.id, data));
       // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
       // available after open(), so use native focus events instead.
-      terminal.textarea?.addEventListener("focus", () => dispatch("focus", { id: shell.id }));
-      terminal.textarea?.addEventListener("blur", () => dispatch("blur", { id: shell.id }));
+      terminal.textarea?.addEventListener("focus", () => onFocus(shell.id));
+      terminal.textarea?.addEventListener("blur", () => onBlur(shell.id));
 
       await tick();
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -234,12 +231,12 @@
   background={theme.background}
   ariaLabel={currentTitle}
   resizeLabel="Resize terminal"
-  on:close={(event) => dispatch("close", event.detail)}
-  on:yellow={() => terminal?.blur()}
-  on:green={fitAndReport}
-  on:focus={(event) => dispatch("focus", event.detail)}
-  on:startMove={(event) => dispatch("startMove", event.detail)}
-  on:startResize={(event) => dispatch("startResize", event.detail)}
+  onClose={(id) => onClose(id)}
+  onYellow={() => terminal?.blur()}
+  onGreen={() => fitAndReport(true)}
+  onFocus={(id) => onFocus(id)}
+  onStartMove={(id, event) => onStartMove(id, event)}
+  onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
   <div
     class="overflow-hidden px-4 py-2"

@@ -26,7 +26,6 @@
   description="Customize your collaborative terminal."
   showCloseButton
   {open}
-  on:close
 >
   <div class="flex flex-col gap-4">
     <div

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { onMount } from "svelte";
 
   let MarkdownEditor: typeof import("$lib/ui/MarkdownEditor.svelte").default | null = null;
 
@@ -14,13 +14,10 @@
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
-
-  const dispatch = createEventDispatcher<{
-    close: { id: number };
-    focus: { id: number };
-    startMove: { id: number; event: PointerEvent };
-    startResize: { id: number; event: PointerEvent; width: number; height: number };
-  }>();
+  export let onClose: (id: number) => void = () => {};
+  export let onFocus: (id: number) => void = () => {};
+  export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
 
   const title = "Markdown Editor";
 </script>
@@ -39,12 +36,12 @@
   background="#111111"
   ariaLabel={title}
   resizeLabel="Resize {title}"
-  on:close={(event) => dispatch("close", event.detail)}
-  on:yellow={(event) => dispatch("focus", event.detail)}
-  on:green={(event) => dispatch("focus", event.detail)}
-  on:focus={(event) => dispatch("focus", event.detail)}
-  on:startMove={(event) => dispatch("startMove", event.detail)}
-  on:startResize={(event) => dispatch("startResize", event.detail)}
+  onClose={(id) => onClose(id)}
+  onYellow={(id) => onFocus(id)}
+  onGreen={(id) => onFocus(id)}
+  onFocus={(id) => onFocus(id)}
+  onStartMove={(id, _event) => onStartMove(id, _event)}
+  onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
   <div class="overflow-hidden" style="width: {windowState.width}px; height: {windowState.height}px;">
     {#if MarkdownEditor}

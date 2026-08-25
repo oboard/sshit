@@ -1002,17 +1002,17 @@
       {connected}
       hasWriteAccess={true}
       {drawingMode}
-      on:create={createShell}
-      on:createEditor={createEditorWindow}
-      on:toggleDrawing={() => (drawingMode = !drawingMode)}
-      on:settings={() => (settingsOpen = true)}
-      on:networkInfo={() => (showNetworkInfo = !showNetworkInfo)}
+      onCreate={createShell}
+      onCreateEditor={createEditorWindow}
+      onToggleDrawing={() => (drawingMode = !drawingMode)}
+      onSettings={() => (settingsOpen = true)}
+      onNetworkInfo={() => (showNetworkInfo = !showNetworkInfo)}
     />
   </div>
 
   <div class="absolute top-4 right-4 z-[10000] flex items-start gap-3">
     <div class="relative">
-      <WorkspaceMode mode={workspaceMode} {windows} on:change={(event) => setWorkspaceMode(event.detail.mode)} on:arrange={() => void applyTiledLayout()} />
+      <WorkspaceMode mode={workspaceMode} onChange={(mode) => setWorkspaceMode(mode)} />
     </div>
     <div class="flex items-center gap-3 pt-1">
       <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
@@ -1056,16 +1056,16 @@
           focused={focusedWindowID === windowState.id}
           tiled={workspaceMode === "tiled"}
           {layoutAnimating}
-          on:focus={(event) => focusWindow(event.detail.id)}
-          on:blur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
-          on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
-          on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
-          on:input={(event) => send({ type: "input", id: event.detail.id, data: event.detail.data })}
-          on:resize={(event) => {
-            windows = windows.map((w) => w.id === event.detail.id ? { ...w, cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } : w);
-            send({ type: "patch", id: event.detail.id, patch: { cols: event.detail.cols, rows: event.detail.rows, width: event.detail.width, height: event.detail.height } });
+          onFocus={(id) => focusWindow(id)}
+          onBlur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
+          onStartMove={(id, event) => startMove(id, event)}
+          onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+          onInput={(id, data) => send({ type: "input", id, data })}
+          onResize={(id, cols, rows, width, height) => {
+            windows = windows.map((w) => w.id === id ? { ...w, cols, rows, width, height } : w);
+            send({ type: "patch", id, patch: { cols, rows, width, height } });
           }}
-          on:close={(event) => closeWindow(event.detail.id)}
+          onClose={(id) => closeWindow(id)}
         />
       {:else}
         <EditorWindow
@@ -1074,10 +1074,10 @@
           focused={focusedWindowID === windowState.id}
           tiled={workspaceMode === "tiled"}
           {layoutAnimating}
-          on:focus={(event) => focusWindow(event.detail.id)}
-          on:startMove={(event) => startMove(event.detail.id, event.detail.event)}
-          on:startResize={(event) => startResize(event.detail.id, event.detail.event, event.detail.width, event.detail.height)}
-          on:close={(event) => closeWindow(event.detail.id)}
+          onFocus={(id) => focusWindow(id)}
+          onStartMove={(id, event) => startMove(id, event)}
+          onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+          onClose={(id) => closeWindow(id)}
         />
       {/if}
     {/each}

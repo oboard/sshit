@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { animate } from "motion";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
@@ -18,6 +18,12 @@
   export let resizeLabel = `Resize ${title}`;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let onClose: (id: number) => void = () => {};
+  export let onYellow: (id: number) => void = () => {};
+  export let onGreen: (id: number) => void = () => {};
+  export let onFocus: (id: number) => void = () => {};
+  export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
 
   let previousTiled = tiled;
   let chromeVisible = true;
@@ -58,15 +64,6 @@
     window.clearTimeout(chromeTimer);
     chromeAnimation?.stop();
   });
-
-  const dispatch = createEventDispatcher<{
-    close: { id: number };
-    yellow: { id: number };
-    green: { id: number };
-    focus: { id: number };
-    startMove: { id: number; event: PointerEvent };
-    startResize: { id: number; event: PointerEvent; width: number; height: number };
-  }>();
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -81,7 +78,7 @@
   data-no-pan
   role="group"
   aria-label={ariaLabel}
-  on:pointerdown|stopPropagation={() => dispatch("focus", { id })}
+  on:pointerdown|stopPropagation={() => onFocus(id)}
   on:wheel|stopPropagation
 >
   {#if chromeVisible}
@@ -93,13 +90,13 @@
       role="toolbar"
       tabindex="-1"
       aria-label="{title} window controls"
-      on:pointerdown|stopPropagation={(event) => { if (!tiled) dispatch("startMove", { id, event }); }}
+      on:pointerdown|stopPropagation={(event) => { if (!tiled) onStartMove(id, event); }}
     >
       <div class="flex flex-1 items-center px-3">
         <CircleButtons>
-          <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && dispatch("close", { id })} />
-          <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && dispatch("yellow", { id })} />
-          <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && dispatch("green", { id })} />
+          <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && onClose(id)} />
+          <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && onYellow(id)} />
+          <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && onGreen(id)} />
         </CircleButtons>
       </div>
       <div class="w-0 flex-grow-[4] overflow-hidden text-ellipsis whitespace-nowrap p-2 text-center text-sm font-medium text-zinc-300">
@@ -119,7 +116,7 @@
     role="separator"
     aria-label={resizeLabel}
     title={resizeLabel}
-    on:pointerdown|stopPropagation={(event) => dispatch("startResize", { id, event, width, height })}
+    on:pointerdown|stopPropagation={(event) => onStartResize(id, event, width, height)}
   ></div>
 </div>
 

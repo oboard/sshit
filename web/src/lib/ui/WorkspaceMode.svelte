@@ -1,32 +1,19 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { animate, stagger } from "motion";
-  import {
-    GridIcon,
-    LayersIcon,
-    Maximize2Icon,
-    MonitorIcon,
-    MousePointerIcon,
-  } from "svelte-feather-icons";
-  import type { WindowState } from "$lib/protocol";
+  import { GridIcon, LayersIcon, MousePointerIcon } from "svelte-feather-icons";
 
   export let mode: "floating" | "tiled" = "floating";
-  export let windows: WindowState[] = [];
+  export let onChange: (mode: "floating" | "tiled") => void = () => {};
 
-  const dispatch = createEventDispatcher<{
-    change: { mode: "floating" | "tiled" };
-    arrange: void;
-  }>();
   let floatingButton: HTMLButtonElement;
   let tiledButton: HTMLButtonElement;
   let cleanup: (() => void) | undefined;
 
-  $: windowCount = windows.length;
-
   function setMode(nextMode: "floating" | "tiled") {
     if (nextMode === mode) return;
     mode = nextMode;
-    dispatch("change", { mode });
+    onChange(mode);
     void animateControl();
   }
 
@@ -76,14 +63,6 @@
   </div>
 </div>
 
-<div class="mode-hint" class:tiled={mode === "tiled"}>
-  {#if mode === "floating"}
-    <MousePointerIcon size="13" /> <span>自由窗口</span>
-  {:else}
-    <GridIcon size="13" /> <span>自动平铺</span>
-  {/if}
-</div>
-
 <style lang="postcss">
   .workspace-mode {
     @apply relative flex items-center gap-1 rounded-xl border border-white/10 bg-zinc-950/75 p-1 shadow-2xl backdrop-blur-xl;
@@ -103,12 +82,6 @@
     box-shadow:
       inset 0 1px rgb(255 255 255 / 0.1),
       0 4px 12px rgb(0 0 0 / 0.2);
-  }
-  .mode-hint {
-    @apply absolute right-0 top-[calc(100%+14px)] flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[.18em] text-zinc-500;
-  }
-  .mode-hint.tiled {
-    @apply text-cyan-300;
   }
   @keyframes appear {
     from {
