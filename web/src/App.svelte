@@ -29,13 +29,11 @@
     neighborPane,
     moveWindowDirection,
     toggleSplitAxis,
-    isLeaf,
     swapLeaves,
     type TileNode,
     type TileAxis,
   } from "$lib/tiling/tiling";
   import { handleTilingKey, type ActionTable } from "$lib/tiling/keybinds";
-  import { getSharedTileTree, getSharedFloated, publishTileLayout, observeTileLayout } from "$lib/tiling/tileLayout";
   import WebTerm from "./WebTerm.svelte";
 
   type ServerUser = {
@@ -64,6 +62,7 @@
     user?: ServerUser;
     windowId?: number;
     patch?: WindowPatch;
+    tileLayout?: { tree: TileNode | null; floated: number[] };
   };
 
   let fabricEl: HTMLDivElement;
@@ -85,30 +84,31 @@
   let focusedWindowID = -1;
   let workspaceMode: "floating" | "tiled" = "floating";
   let tiledViewport = { width: 0, height: 0 };
-  type TileAxis = "horizontal" | "vertical";
-  type TileNode = { id: string; windowId: number } | { id: string; axis: TileAxis; ratio: number; first: TileNode; second: TileNode };
-  type TileSplit = { id: string; axis: TileAxis; x: number; y: number; width: number; height: number; ratio: number };
   let tileTree: TileNode | null = null;
-  let tileSplits: TileSplit[] = [];
-  let activeTileSplit: string | null = null;
   let layoutAnimating = false;
-  let splittersVisible = false;
   let layoutAnimationTimer: number | undefined;
-  let splittersTimer: number | undefined;
   // Windows floated out of the tiled tree (drag-out). They render as floating
   // overlays above the tiled grid. This is the presentational counterpart of
   // Hyprland floating a window during `mousemove`.
   let floatedTileIds: number[] = [];
-  // Observer handle for the shared, multi-user tiled layout. Detached on
-  // destroy so this client stops adopting remote layout edits once it leaves.
-  let unobserveTiledLayout: (() => void) | undefined;
+  // A remote tree can arrive before this client's shell WebSocket delivers the
+  // matching window list. Keep it until that list is ready instead of dropping
+  // a valid collaborator reorder.
+  let pendingSharedTileLayout: {
+    tree: TileNode | null;
+    floated: number[];
+  } | null = null;
   // The pane that currently owns keyboard/mouse focus in tiled mode. Mirrors
   // Hyprland's `focusState`: a single shared focus target for both input paths.
   let tiledFocusId = -1;
   // Ctrl is the modifier that primes tiled chords and drag-to-reorder.
   let ctrlModifierHeld = false;
   const TILED_DRAG_THRESHOLD = 8;
-  let tiledReorderPotential: { windowId: number; downX: number; downY: number } | null = null;
+  let tiledReorderPotential: {
+    windowId: number;
+    downX: number;
+    downY: number;
+  } | null = null;
   let tiledReorderDrag: {
     windowId: number;
     width: number;
@@ -120,8 +120,13 @@
     ghostX: number;
     ghostY: number;
     lastTarget: number | null;
-    didReorder: boolean;
-    targets: Array<{ windowId: number; x: number; y: number; width: number; height: number }>;
+    targets: Array<{
+      windowId: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }>;
   } | null = null;
   const drawingColors = [
     { value: "#f472b6", name: "Pink" },
@@ -168,7 +173,13 @@
     mid0: [number, number];
     dist0: number;
   } | null = null;
-  let tapCandidate: { id: number; x: number; y: number; time: number; moved: boolean } | null = null;
+  let tapCandidate: {
+    id: number;
+    x: number;
+    y: number;
+    time: number;
+    moved: boolean;
+  } | null = null;
   let lastTap = { time: 0, x: 0, y: 0 };
 
   // Reused across every binary frame: terminal output is high-frequency, so
@@ -181,29 +192,61 @@
   let movingWindowID = -1;
   let movingStart = [0, 0];
   let movingOrigin = [0, 0];
-  let movingPointerPos = { clientX: 0, clientY: 0 };  // Track pointer during tiled drag
   let resizingWindowID = -1;
   let resizingStart = [0, 0];
   let resizingOrigin = [0, 0];
 
   $: shellWindows = windows.filter((w) => w.kind === "shell");
-  $: if (workspaceMode === "tiled") syncTileTree(windows.map((windowState) => windowState.id));
+  $: if (workspaceMode === "tiled") {
+    const pending = pendingSharedTileLayout;
+    const currentWindowIds = new Set(
+      windows.map((windowState) => windowState.id),
+    );
+    const pendingLeaves = tileLeaves(pending?.tree ?? null);
+    const pendingTiledIds = new Set(
+      [...currentWindowIds].filter((id) => !pending?.floated.includes(id)),
+    );
+    const pendingMatches =
+      pending !== null &&
+      pendingLeaves.length === pendingTiledIds.size &&
+      pendingLeaves.every((id) => pendingTiledIds.has(id));
+    if (pendingMatches) {
+      tileTree = pending.tree;
+      floatedTileIds = pending.floated;
+      pendingSharedTileLayout = null;
+      void applyTiledLayout();
+    } else {
+      syncTileTree(windows.map((windowState) => windowState.id));
+    }
+  }
   // Keep tileTree as an explicit dependency. Svelte's legacy reactivity does
   // not discover variables referenced only inside tiledWindows(), which meant
   // splitter drags updated the tree but did not redraw panes until mouseup.
-  $: displayWindows = (workspaceMode === "tiled" ? tiledWindows(windows, tiledViewport, tileTree) : windows)
+  $: displayWindows = (
+    workspaceMode === "tiled"
+      ? tiledWindows(windows, tiledViewport, tileTree)
+      : windows
+  )
     // Keep the real pane under the pointer while every other pane reflows around it.
-    .map((windowState) => windowState.id === tiledReorderDrag?.windowId
-      ? { ...windowState, x: tiledReorderDrag.ghostX, y: tiledReorderDrag.ghostY, zIndex: 1000 }
-      : windowState);
+    .map((windowState) =>
+      windowState.id === tiledReorderDrag?.windowId
+        ? {
+            ...windowState,
+            x: tiledReorderDrag.ghostX,
+            y: tiledReorderDrag.ghostY,
+            zIndex: 1000,
+          }
+        : windowState,
+    );
 
   // Floating overlays that escape the tiled grid while still being part of the
   // same workspace (windows floated out via Ctrl+drag).
-  $: floatedOverlays = workspaceMode === "tiled"
-    ? floatedTileIds
-        .map((id) => windows.find((w) => w.id === id))
-        .filter((w): w is WindowState => !!w)
-    : [];
+  $: floatedOverlays =
+    workspaceMode === "tiled"
+      ? floatedTileIds
+          .map((id) => windows.find((w) => w.id === id))
+          .filter((w): w is WindowState => !!w)
+      : [];
 
   $: usersForUI = users.map((user) => [
     user.id,
@@ -253,6 +296,8 @@
 
   function applyState(message: Message) {
     if (message.users !== undefined) users = message.users;
+    if (message.tileLayout !== undefined)
+      pendingSharedTileLayout = message.tileLayout;
     if (message.windows !== undefined) {
       const previousCount = windows.length;
       const localById = new Map(windows.map((w) => [w.id, w]));
@@ -289,10 +334,22 @@
       }
       outputs = nextOutputs;
 
-      if (previousCount === 0 && windows.length >= 1 && workspaceMode === "floating") {
+      if (
+        previousCount === 0 &&
+        windows.length >= 1 &&
+        workspaceMode === "floating"
+      ) {
         const target = windows.find((w) => w.kind === "shell") ?? windows[0];
         const fitZoom = fitZoomFor(target.width || 760);
-        requestAnimationFrame(() => moveCanvasTo(target.x, target.y, fitZoom, target.width || 760, target.height || 420));
+        requestAnimationFrame(() =>
+          moveCanvasTo(
+            target.x,
+            target.y,
+            fitZoom,
+            target.width || 760,
+            target.height || 420,
+          ),
+        );
       }
     }
   }
@@ -304,12 +361,14 @@
     // ArrayBuffer keeps decoding cheap (no Blob async round-trip).
     socket.binaryType = "arraybuffer";
 
-    socket.onopen = () => {
+    const currentSocket = socket;
+    currentSocket.onopen = () => {
       serverLatency = null;
       shellLatency = 0;
     };
 
-    socket.onmessage = (event) => {
+    currentSocket.onmessage = (event) => {
+      if (socket !== currentSocket) return;
       // Binary frames carry terminal output for a specific shell window:
       // [version][window id (int64 BE)][raw bytes]. JSON text frames are the
       // control plane (auth/state/hello/…). Separation means the hot path
@@ -322,7 +381,10 @@
             const bytes = new Uint8Array(event.data, 9);
             const data = binDecoder.decode(bytes);
             if (wid <= 0x7fffffff) {
-              outputs = { ...outputs, [Number(wid)]: (outputs[Number(wid)] ?? "") + data };
+              outputs = {
+                ...outputs,
+                [Number(wid)]: (outputs[Number(wid)] ?? "") + data,
+              };
             }
           }
         }
@@ -353,7 +415,11 @@
         const collabPassword = password;
         password = "";
         makeToast({ kind: "success", message: "Connected to sshit." });
-        collabConn?.connect(collabPassword, $settings.name || `user-${message.id ?? 0}`, message.id ?? 0);
+        collabConn?.connect(
+          collabPassword,
+          $settings.name || `user-${message.id ?? 0}`,
+          message.id ?? 0,
+        );
         if ($settings.name) {
           send({ type: "setName", name: $settings.name });
           lastSentName = $settings.name;
@@ -363,22 +429,39 @@
       } else if (message.type === "state") {
         applyState(message);
       } else if (message.type === "cursor" && message.user) {
-        users = [...users.filter((user) => user.id !== message.user!.id), message.user];
-      } else if (message.type === "output" && message.id && message.data !== undefined) {
-        outputs = { ...outputs, [message.id]: (outputs[message.id] ?? "") + message.data };
+        users = [
+          ...users.filter((user) => user.id !== message.user!.id),
+          message.user,
+        ];
+      } else if (
+        message.type === "output" &&
+        message.id &&
+        message.data !== undefined
+      ) {
+        outputs = {
+          ...outputs,
+          [message.id]: (outputs[message.id] ?? "") + message.data,
+        };
       }
     };
 
-    socket.onclose = () => {
+    currentSocket.onclose = () => {
+      // `connect()` replaces and closes a previous socket. Its late close event
+      // must not schedule another connection (and another /collab auth cycle).
+      if (socket !== currentSocket) return;
+      socket = null;
       connected = false;
       if (!manualClose) {
         makeToast({ kind: "error", message: "Disconnected. Reconnecting…" });
+        window.clearTimeout(reconnectTimer);
         reconnectTimer = window.setTimeout(connect, 1000);
       }
     };
 
-    socket.onerror = () => {
-      makeToast({ kind: "error", message: "WebSocket connection error." });
+    currentSocket.onerror = () => {
+      if (socket === currentSocket) {
+        makeToast({ kind: "error", message: "WebSocket connection error." });
+      }
     };
   }
 
@@ -405,14 +488,26 @@
   function drawingAnchorAt(x: number, y: number): DrawingAnchor {
     const hit = [...windows]
       .sort((a, b) => (b.zIndex ?? 1) - (a.zIndex ?? 1))
-      .find((w) => x >= w.x && x <= w.x + w.width && y >= w.y && y <= w.y + w.height + 42);
+      .find(
+        (w) =>
+          x >= w.x &&
+          x <= w.x + w.width &&
+          y >= w.y &&
+          y <= w.y + w.height + 42,
+      );
     if (hit) {
-      return hit.kind === "editor" ? { kind: "editorWindow", id: hit.id } : { kind: "shell", id: hit.id };
+      return hit.kind === "editor"
+        ? { kind: "editorWindow", id: hit.id }
+        : { kind: "shell", id: hit.id };
     }
     return { kind: "world" };
   }
 
-  function pointForAnchor(anchor: DrawingAnchor, x: number, y: number): [number, number] {
+  function pointForAnchor(
+    anchor: DrawingAnchor,
+    x: number,
+    y: number,
+  ): [number, number] {
     const [originX, originY] = anchorOrigin(anchor);
     return [x - originX, y - originY];
   }
@@ -420,7 +515,10 @@
   function pathData(shape: DrawingShape) {
     const [originX, originY] = anchorOrigin(shape.anchor);
     return shape.points
-      .map((point, index) => `${index === 0 ? "M" : "L"} ${originX + point[0]} ${originY + point[1]}`)
+      .map(
+        (point, index) =>
+          `${index === 0 ? "M" : "L"} ${originX + point[0]} ${originY + point[1]}`,
+      )
       .join(" ");
   }
 
@@ -492,7 +590,11 @@
     const py = clientY - rect.top;
     const worldX = (px - viewportX) / zoom;
     const worldY = (py - viewportY) / zoom;
-    animateViewTo(px - worldX * targetZoom, py - worldY * targetZoom, targetZoom);
+    animateViewTo(
+      px - worldX * targetZoom,
+      py - worldY * targetZoom,
+      targetZoom,
+    );
   }
 
   function resetZoom() {
@@ -517,33 +619,48 @@
 
   function createShell() {
     const { x, y } = arrangeNewTerminal(existingWindows());
-    send({ type: "create", kind: "shell", x, y, cols: 80, rows: 24, width: 760, height: 420 });
-    if (workspaceMode === "floating") moveCanvasTo(x, y, fitZoomFor(760), 760, 420);
+    send({
+      type: "create",
+      kind: "shell",
+      x,
+      y,
+      cols: 80,
+      rows: 24,
+      width: 760,
+      height: 420,
+    });
+    if (workspaceMode === "floating")
+      moveCanvasTo(x, y, fitZoomFor(760), 760, 420);
   }
 
   function createEditorWindow() {
     const { x, y } = arrangeNewTerminal(existingWindows());
     send({ type: "create", kind: "editor", x, y, width: 980, height: 620 });
-    if (workspaceMode === "floating") moveCanvasTo(x, y, fitZoomFor(980), 980, 620);
+    if (workspaceMode === "floating")
+      moveCanvasTo(x, y, fitZoomFor(980), 980, 620);
   }
 
   let nextTileSplitID = 1;
 
-  /**
-   * Push the current tiled-layout snapshot into the shared Yjs store so every
-   * connected user sees the same arrangement. Local writes are tagged with a
-   * local origin and ignored by the observer, so this never echoes back.
-   */
+  /** Publish one complete tiled-layout snapshot through the workspace socket. */
   function persistTiledLayout() {
-    publishTileLayout(tileTree, floatedTileIds);
+    send({
+      type: "tileLayout",
+      tileLayout: { tree: tileTree, floated: floatedTileIds },
+    });
   }
 
   function tileLeaves(node: TileNode | null): number[] {
     if (!node) return [];
-    return "windowId" in node ? [node.windowId] : [...tileLeaves(node.first), ...tileLeaves(node.second)];
+    return "windowId" in node
+      ? [node.windowId]
+      : [...tileLeaves(node.first), ...tileLeaves(node.second)];
   }
 
-  function pruneTileTree(node: TileNode | null, valid: Set<number>): TileNode | null {
+  function pruneTileTree(
+    node: TileNode | null,
+    valid: Set<number>,
+  ): TileNode | null {
     if (!node) return null;
     if ("windowId" in node) return valid.has(node.windowId) ? node : null;
     const first = pruneTileTree(node.first, valid);
@@ -558,7 +675,14 @@
     // Windows floated out of the grid are not part of the tiled tree.
     for (const floated of floatedTileIds) valid.delete(floated);
     const currentLeaves = tileLeaves(tileTree);
-    if (currentLeaves.length === ids.length && currentLeaves.every((id) => valid.has(id))) return;
+    // Compare against the tiled IDs, not all workspace IDs: floated overlays are
+    // intentionally absent from the tree. The old comparison caused needless
+    // reconciliation/publish attempts whenever a pane was floated.
+    if (
+      currentLeaves.length === valid.size &&
+      currentLeaves.every((id) => valid.has(id))
+    )
+      return;
     let next = pruneTileTree(tileTree, valid);
     const present = new Set(tileLeaves(next));
     for (const id of ids) {
@@ -569,8 +693,15 @@
       } else {
         // Alternate the outer split direction for each new pane. This produces
         // a flexible binary layout instead of a fixed 2×2 grid.
-        const axis: TileAxis = tileLeaves(next).length % 2 === 1 ? "vertical" : "horizontal";
-        next = { id: `split-${nextTileSplitID++}`, axis, ratio: 0.5, first: next, second: leaf };
+        const axis: TileAxis =
+          tileLeaves(next).length % 2 === 1 ? "vertical" : "horizontal";
+        next = {
+          id: `split-${nextTileSplitID++}`,
+          axis,
+          ratio: 0.5,
+          first: next,
+          second: leaf,
+        };
       }
       present.add(id);
     }
@@ -593,44 +724,60 @@
     }
   }
 
-  function tiledWindows(source: WindowState[], viewport: { width: number; height: number }, tree: TileNode | null) {
-    if (!source.length || !viewport.width || !viewport.height || !tree) return source;
+  function tiledWindows(
+    source: WindowState[],
+    viewport: { width: number; height: number },
+    tree: TileNode | null,
+  ) {
+    if (!source.length || !viewport.width || !viewport.height || !tree)
+      return source;
     const topInset = 72;
-    const gap = 10;  // Gap between tiled windows
-    const byID = new Map(source.map((windowState) => [windowState.id, windowState]));
+    const gap = 10; // Gap between tiled windows
+    const byID = new Map(
+      source.map((windowState) => [windowState.id, windowState]),
+    );
 
     const result: WindowState[] = [];
-    const splits: TileSplit[] = [];
 
-    function visit(node: TileNode, x: number, y: number, width: number, height: number) {
+    function visit(
+      node: TileNode,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ) {
       if ("windowId" in node) {
         const windowState = byID.get(node.windowId);
         // Apply gap by shrinking the window and offsetting position
-        if (windowState) result.push({
-          ...windowState,
-          x: x + gap / 2,
-          y: y + gap / 2,
-          width: Math.max(1, width - gap),
-          height: Math.max(1, height - gap),
-          zIndex: result.length + 1
-        });
+        if (windowState)
+          result.push({
+            ...windowState,
+            x: x + gap / 2,
+            y: y + gap / 2,
+            width: Math.max(1, width - gap),
+            height: Math.max(1, height - gap),
+            zIndex: result.length + 1,
+          });
         return;
       }
       if (node.axis === "vertical") {
         const firstWidth = Math.round(width * node.ratio);
-        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x: x + firstWidth, y, width, height });
         visit(node.first, x, y, firstWidth, height);
         visit(node.second, x + firstWidth, y, width - firstWidth, height);
       } else {
         const firstHeight = Math.round(height * node.ratio);
-        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x, y: y + firstHeight, width, height });
         visit(node.first, x, y, width, firstHeight);
         visit(node.second, x, y + firstHeight, width, height - firstHeight);
       }
     }
 
-    visit(tree, 0, topInset, viewport.width, Math.max(1, viewport.height - topInset));
-    tileSplits = splits;
+    visit(
+      tree,
+      0,
+      topInset,
+      viewport.width,
+      Math.max(1, viewport.height - topInset),
+    );
     return result;
   }
 
@@ -646,40 +793,6 @@
     for (const windowState of displayWindows) {
       if (windowState.kind === "shell") termRefs[windowState.id]?.fitSize();
     }
-  }
-
-  function startTileSplit(id: string, event: PointerEvent) {
-    if (workspaceMode !== "tiled") return;
-    event.preventDefault();
-    activeTileSplit = id;
-    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-  }
-
-  function updateTileRatio(node: TileNode | null, id: string, ratio: number): TileNode | null {
-    if (!node || "windowId" in node) return node;
-    if (node.id === id) return { ...node, ratio };
-    return { ...node, first: updateTileRatio(node.first, id, ratio)!, second: updateTileRatio(node.second, id, ratio)! };
-  }
-
-  function moveTileSplit(event: PointerEvent) {
-    if (!activeTileSplit || !fabricEl) return;
-    const split = tileSplits.find((candidate) => candidate.id === activeTileSplit);
-    const rect = fabricEl.getBoundingClientRect();
-    if (!split) return;
-    event.preventDefault();
-    const ratio = split.axis === "vertical"
-      ? (event.clientX - rect.left - split.x + split.ratio * split.width) / Math.max(1, split.width)
-      : (event.clientY - rect.top - split.y + split.ratio * split.height) / Math.max(1, split.height);
-    tileTree = updateTileRatio(tileTree, activeTileSplit, Math.max(0.12, Math.min(0.88, ratio)));
-  }
-
-  function stopTileSplit() {
-    if (!activeTileSplit) return;
-    activeTileSplit = null;
-    // Refit terminal cells once the splitter settles, rather than doing costly
-    // xterm measurements for every pointer-move frame.
-    persistTiledLayout();
-    void applyTiledLayout();
   }
 
   function setWorkspaceMode(nextMode: "floating" | "tiled") {
@@ -698,11 +811,11 @@
       persistTiledLayout();
     }
     layoutAnimating = true;
-    splittersVisible = false;
     window.clearTimeout(layoutAnimationTimer);
-    window.clearTimeout(splittersTimer);
-    layoutAnimationTimer = window.setTimeout(() => (layoutAnimating = false), 480);
-    splittersTimer = window.setTimeout(() => (splittersVisible = nextMode === "tiled"), 300);
+    layoutAnimationTimer = window.setTimeout(
+      () => (layoutAnimating = false),
+      480,
+    );
     if (nextMode === "tiled") {
       // Remember the free-canvas camera exactly as the user left it. Tiled mode
       // is only a local presentation layer and must never discard this state.
@@ -720,7 +833,15 @@
     } else if (floatingCamera) {
       // Return to the exact pan and magnification the floating workspace had
       // before tiling, rather than forcing the user back to a 100% overview.
-      animateViewTo(floatingCamera.x, floatingCamera.y, floatingCamera.zoom, viewportX, viewportY, zoom, 480);
+      animateViewTo(
+        floatingCamera.x,
+        floatingCamera.y,
+        floatingCamera.zoom,
+        viewportX,
+        viewportY,
+        zoom,
+        480,
+      );
     } else if (wasFloating) {
       layoutAnimating = false;
     }
@@ -737,7 +858,8 @@
       // When the focused pane isn't tiled (floated out), full-screen applies to it.
       return;
     }
-    if (workspaceMode === "floating") send({ type: "patch", id, patch: { zIndex: ++topZ } });
+    if (workspaceMode === "floating")
+      send({ type: "patch", id, patch: { zIndex: ++topZ } });
   }
 
   function closeWindow(id: number) {
@@ -780,7 +902,10 @@
       swap_up: () => swapTiled("up"),
       swap_down: () => swapTiled("down"),
       toggle_split: () => toggleTiledSplit(),
-      close: () => { const p = activeTiledPane(); if (p >= 0) closeWindow(p); },
+      close: () => {
+        const p = activeTiledPane();
+        if (p >= 0) closeWindow(p);
+      },
       cycle_focus_next: () => moveTiledFocus("right"),
     };
   }
@@ -793,6 +918,26 @@
     tiledFocusId = id;
     focusedWindowID = id;
     if (isFloatedTile(id)) focusFloatedOverlay(id, true);
+    // Defer focus so the DOM reflects the new focused state before we
+    // hand the real input focus to the target terminal/editor element.
+    requestAnimationFrame(() => {
+      const paneEl = document.querySelector(
+        `[data-tile-pane="${id}"]`,
+      ) as HTMLElement | null;
+      if (paneEl) {
+        // Find the terminal textarea or the CodeMirror editor inside this pane
+        // and give it real input focus so the cursor lands on the content.
+        const textarea = paneEl.querySelector(
+          "textarea",
+        ) as HTMLTextAreaElement | null;
+        if (textarea) {
+          textarea.focus();
+        } else {
+          // Fallback: focus the pane itself so keyboard events reach it.
+          paneEl.focus();
+        }
+      }
+    });
   }
 
   function swapTiled(dir: "left" | "right" | "up" | "down") {
@@ -819,18 +964,6 @@
     tileTree = toggleSplitAxis(tileTree, current);
     if (tileTree) syncTileTree(tileLeaves(tileTree));
     persistTiledLayout();
-  }
-
-  /** Which tiled window sits under a screen point (hit-testing the pane boxes). */
-  function windowAtTiled(clientX: number, clientY: number, exclude: number): number | null {
-    if (!fabricEl) return null;
-    const rect = fabricEl.getBoundingClientRect();
-    const worldX = (clientX - rect.left - viewportX) / zoom;
-    const worldY = (clientY - rect.top - viewportY) / zoom;
-    const win = displayWindows.find(
-      (w) => w.id !== exclude && worldX >= w.x && worldX <= w.x + w.width && worldY >= w.y && worldY <= w.y + w.height,
-    );
-    return win ? win.id : null;
   }
 
   function startMove(id: number, event: PointerEvent) {
@@ -860,10 +993,15 @@
       ghostX: pane.x,
       ghostY: pane.y,
       lastTarget: null,
-      didReorder: false,
       targets: displayWindows
         .filter((windowState) => windowState.id !== id)
-        .map(({ id: windowId, x, y, width, height }) => ({ windowId, x, y, width, height })),
+        .map(({ id: windowId, x, y, width, height }) => ({
+          windowId,
+          x,
+          y,
+          width,
+          height,
+        })),
     };
     tiledReorderPotential = null;
   }
@@ -871,39 +1009,62 @@
   function moveTiledReorder(event: PointerEvent) {
     if (tiledReorderPotential && !tiledReorderDrag) {
       const { downX, downY, windowId } = tiledReorderPotential;
-      if (Math.hypot(event.clientX - downX, event.clientY - downY) > TILED_DRAG_THRESHOLD) {
+      if (
+        Math.hypot(event.clientX - downX, event.clientY - downY) >
+        TILED_DRAG_THRESHOLD
+      ) {
         beginTiledReorder(windowId, event);
       }
     }
     if (!tiledReorderDrag || !fabricEl) return;
     const drag = tiledReorderDrag;
-    const ghostX = Math.round(drag.originX + (event.clientX - drag.downX) / zoom);
-    const ghostY = Math.round(drag.originY + (event.clientY - drag.downY) / zoom);
+    const ghostX = Math.round(
+      drag.originX + (event.clientX - drag.downX) / zoom,
+    );
+    const ghostY = Math.round(
+      drag.originY + (event.clientY - drag.downY) / zoom,
+    );
     const rect = fabricEl.getBoundingClientRect();
     const worldX = (event.clientX - rect.left - viewportX) / zoom;
     const worldY = (event.clientY - rect.top - viewportY) / zoom;
-    const target = drag.targets.find(({ x, y, width, height }) => worldX >= x && worldX <= x + width && worldY >= y && worldY <= y + height)?.windowId ?? null;
+    const target =
+      drag.targets.find(
+        ({ x, y, width, height }) =>
+          worldX >= x &&
+          worldX <= x + width &&
+          worldY >= y &&
+          worldY <= y + height,
+      )?.windowId ?? null;
 
     // Swap immediately when crossing a pane. Updating the shared tree only on
     // drop avoids broadcasting an intermediate layout on every pointer frame.
     if (target && target !== drag.lastTarget && tileTree) {
       tileTree = swapLeaves(tileTree, drag.windowId, target);
     }
-    tiledReorderDrag = { ...drag, ghostX, ghostY, lastTarget: target, didReorder: drag.didReorder || target !== null };
+    tiledReorderDrag = { ...drag, ghostX, ghostY, lastTarget: target };
   }
 
   function finishTiledReorder() {
-    const dragged = tiledReorderDrag;
-    tiledReorderPotential = null;
-    tiledReorderDrag = null;
-    if (dragged?.didReorder) {
-      persistTiledLayout();
-      void applyTiledLayout();
+    if (!tiledReorderDrag) {
+      tiledReorderPotential = null;
+      return;
     }
+    // Deliberately publish once, at pointer release. This keeps drag frames
+    // local while guaranteeing every completed Ctrl-drag commits its final tree.
+    tiledReorderDrag = null;
+    tiledReorderPotential = null;
+    persistTiledLayout();
+    void applyTiledLayout();
   }
 
   function handleTiledReorderPointerDown(event: PointerEvent) {
-    if (workspaceMode !== "tiled" || !ctrlModifierHeld || event.button !== 0 || tiledReorderDrag) return;
+    if (
+      workspaceMode !== "tiled" ||
+      !ctrlModifierHeld ||
+      event.button !== 0 ||
+      tiledReorderDrag
+    )
+      return;
     const target = event.target as HTMLElement | null;
     const pane = target?.closest("[data-tile-pane]") as HTMLElement | null;
     if (!pane) return;
@@ -913,7 +1074,11 @@
     event.stopPropagation();
     tiledFocusId = windowId;
     focusedWindowID = windowId;
-    tiledReorderPotential = { windowId, downX: event.clientX, downY: event.clientY };
+    tiledReorderPotential = {
+      windowId,
+      downX: event.clientX,
+      downY: event.clientY,
+    };
   }
 
   function handleTiledReorderPointerMove(event: PointerEvent) {
@@ -924,7 +1089,12 @@
     finishTiledReorder();
   }
 
-  function startResize(id: number, event: PointerEvent, width: number, height: number) {
+  function startResize(
+    id: number,
+    event: PointerEvent,
+    width: number,
+    height: number,
+  ) {
     if (workspaceMode === "tiled") return;
     event.preventDefault();
     focusWindow(id);
@@ -937,7 +1107,10 @@
     return Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1]));
   }
 
-  function pointerMid(a: [number, number], b: [number, number]): [number, number] {
+  function pointerMid(
+    a: [number, number],
+    b: [number, number],
+  ): [number, number] {
     return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
   }
 
@@ -953,7 +1126,13 @@
       panning = true;
       panStart = [event.clientX, event.clientY];
       panOrigin = [viewportX, viewportY];
-      tapCandidate = { id: event.pointerId, x: event.clientX, y: event.clientY, time: Date.now(), moved: false };
+      tapCandidate = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        time: Date.now(),
+        moved: false,
+      };
     } else if (surfacePointers.size === 2) {
       // A second finger on the canvas promotes the pan to a pinch zoom.
       panning = false;
@@ -1004,7 +1183,8 @@
     event?.preventDefault();
     event?.stopPropagation();
     const target = event?.currentTarget as SVGSVGElement | null;
-    if (event && target?.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+    if (event && target?.hasPointerCapture(event.pointerId))
+      target.releasePointerCapture(event.pointerId);
     if (draftShape && draftShape.points.length > 1) {
       drawingShapes.set(draftShape.id, draftShape);
     }
@@ -1026,13 +1206,22 @@
   }
 
   function handleDrawingKeydown(event: KeyboardEvent) {
-    if (!drawingMode || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (
+      !drawingMode ||
+      event.defaultPrevented ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey
+    )
+      return;
     if (event.key === "Escape") {
       drawingMode = false;
       return;
     }
-    if (event.key === "[") drawingStrokeWidth = Math.max(2, drawingStrokeWidth - 1);
-    if (event.key === "]") drawingStrokeWidth = Math.min(12, drawingStrokeWidth + 1);
+    if (event.key === "[")
+      drawingStrokeWidth = Math.max(2, drawingStrokeWidth - 1);
+    if (event.key === "]")
+      drawingStrokeWidth = Math.min(12, drawingStrokeWidth + 1);
   }
 
   function handleWheel(event: WheelEvent) {
@@ -1080,8 +1269,17 @@
     if (surfacePointers.has(event.pointerId)) {
       surfacePointers.set(event.pointerId, [event.clientX, event.clientY]);
 
-      if (tapCandidate && event.pointerId === tapCandidate.id && !tapCandidate.moved) {
-        if (Math.hypot(event.clientX - tapCandidate.x, event.clientY - tapCandidate.y) > 10) {
+      if (
+        tapCandidate &&
+        event.pointerId === tapCandidate.id &&
+        !tapCandidate.moved
+      ) {
+        if (
+          Math.hypot(
+            event.clientX - tapCandidate.x,
+            event.clientY - tapCandidate.y,
+          ) > 10
+        ) {
           tapCandidate.moved = true;
         }
       }
@@ -1090,11 +1288,15 @@
         const rect = fabricEl.getBoundingClientRect();
         const [a, b] = [...surfacePointers.values()];
         const mid = pointerMid(a, b);
-        const nextZoom = clampZoom(pinch.zoom0 * (pointerDist(a, b) / pinch.dist0));
+        const nextZoom = clampZoom(
+          pinch.zoom0 * (pointerDist(a, b) / pinch.dist0),
+        );
         // Keep the world point under the initial pinch midpoint stationary
         // while the midpoint itself follows the fingers.
-        const worldX = (pinch.mid0[0] - rect.left - pinch.viewport0[0]) / pinch.zoom0;
-        const worldY = (pinch.mid0[1] - rect.top - pinch.viewport0[1]) / pinch.zoom0;
+        const worldX =
+          (pinch.mid0[0] - rect.left - pinch.viewport0[0]) / pinch.zoom0;
+        const worldY =
+          (pinch.mid0[1] - rect.top - pinch.viewport0[1]) / pinch.zoom0;
         zoom = nextZoom;
         viewportX = Math.round(mid[0] - rect.left - worldX * nextZoom);
         viewportY = Math.round(mid[1] - rect.top - worldY * nextZoom);
@@ -1113,10 +1315,26 @@
       // the viewport itself.
       const vw = fabricEl?.clientWidth ?? 1024;
       const vh = fabricEl?.clientHeight ?? 768;
-      const minWidth = Math.min(isShell(resizingWindowID) ? 320 : 520, Math.max(240, vw - 48));
-      const minHeight = Math.min(isShell(resizingWindowID) ? 180 : 360, Math.max(200, vh - 48));
-      const width = Math.max(minWidth, Math.round(resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom));
-      const height = Math.max(minHeight, Math.round(resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom));
+      const minWidth = Math.min(
+        isShell(resizingWindowID) ? 320 : 520,
+        Math.max(240, vw - 48),
+      );
+      const minHeight = Math.min(
+        isShell(resizingWindowID) ? 180 : 360,
+        Math.max(200, vh - 48),
+      );
+      const width = Math.max(
+        minWidth,
+        Math.round(
+          resizingOrigin[0] + (event.clientX - resizingStart[0]) / zoom,
+        ),
+      );
+      const height = Math.max(
+        minHeight,
+        Math.round(
+          resizingOrigin[1] + (event.clientY - resizingStart[1]) / zoom,
+        ),
+      );
       windows = windows.map((w) => {
         if (w.id !== resizingWindowID) return w;
         const next = { ...w, width, height };
@@ -1133,10 +1351,15 @@
     }
 
     if (movingWindowID !== -1) {
-      movingPointerPos = { clientX: event.clientX, clientY: event.clientY };
-      const x = Math.round(movingOrigin[0] + (event.clientX - movingStart[0]) / zoom);
-      const y = Math.round(movingOrigin[1] + (event.clientY - movingStart[1]) / zoom);
-      windows = windows.map((w) => (w.id === movingWindowID ? { ...w, x, y } : w));
+      const x = Math.round(
+        movingOrigin[0] + (event.clientX - movingStart[0]) / zoom,
+      );
+      const y = Math.round(
+        movingOrigin[1] + (event.clientY - movingStart[1]) / zoom,
+      );
+      windows = windows.map((w) =>
+        w.id === movingWindowID ? { ...w, x, y } : w,
+      );
       return;
     }
   }
@@ -1159,12 +1382,17 @@
     }
 
     // Double-tap on empty canvas toggles between 100% and 200% zoom.
-    if (wasSurfacePointer && tapCandidate && event.pointerId === tapCandidate.id) {
+    if (
+      wasSurfacePointer &&
+      tapCandidate &&
+      event.pointerId === tapCandidate.id
+    ) {
       const quick = Date.now() - tapCandidate.time < 350;
       if (quick && !tapCandidate.moved) {
         const now = Date.now();
         const isDouble =
-          now - lastTap.time < 350 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 40;
+          now - lastTap.time < 350 &&
+          Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 40;
         if (isDouble) {
           lastTap = { time: 0, x: 0, y: 0 };
           handleDoubleTap(event.clientX, event.clientY);
@@ -1208,21 +1436,9 @@
       resizingWindowID = -1;
     }
     if (movingWindowID !== -1) {
-      // In tiled mode, swap window positions based on drop target
-      if (workspaceMode === "tiled" && tileTree) {
-        const targetWin = windowAtTiled(movingPointerPos.clientX, movingPointerPos.clientY, movingWindowID);
-        if (targetWin && targetWin !== movingWindowID) {
-          // Swap the dragged window with the target window in the tile tree
-          tileTree = swapLeaves(tileTree, movingWindowID, targetWin);
-          persistTiledLayout();
-        }
-        // Reset the window position back to its tiled position
-        // (it was temporarily moved during drag for visual feedback)
-        void applyTiledLayout();
-      } else {
-        const win = windowById(movingWindowID);
-        if (win) send({ type: "patch", id: win.id, patch: { x: win.x, y: win.y } });
-      }
+      const win = windowById(movingWindowID);
+      if (win)
+        send({ type: "patch", id: win.id, patch: { x: win.x, y: win.y } });
       movingWindowID = -1;
     }
   }
@@ -1248,7 +1464,10 @@
     if (!ctrlModifierHeld) return;
 
     // Handle Ctrl+Q in both floating and tiled modes to close focused window
-    if ((event.key === "q" || event.key === "Q") && workspaceMode === "floating") {
+    if (
+      (event.key === "q" || event.key === "Q") &&
+      workspaceMode === "floating"
+    ) {
       if (focusedWindowID >= 0) {
         closeWindow(focusedWindowID);
         event.preventDefault();
@@ -1280,34 +1499,10 @@
     refreshShapes();
     drawingShapes.observe(refreshShapes);
     // Restore the user's floating/tiled toggle from local storage.
-    workspaceMode = localStorage.getItem("sshx-workspace-mode") === "tiled" ? "tiled" : "floating";
-    // Adopt the room-wide tiled layout: whatever panes/ratios are shared by the
-    // collaborators becomes this browser's layout too, and any remote change is
-    // applied live. Local edits publish through persistTiledLayout() instead.
-    // Note: we don't initialize tileTree from getSharedTileTree() here because
-    // the Yjs data might contain stale window IDs. syncTileTree will build the
-    // correct tree from the current windows list.
-    floatedTileIds = getSharedFloated();
-    unobserveTiledLayout = observeTileLayout((nextTree, nextFloated) => {
-      // Only adopt remote layout if there is actual data AND the tree's window IDs
-      // match our current windows. Otherwise, syncTileTree will build the correct tree.
-      if (nextTree !== null) {
-        const treeWindowIds = tileLeaves(nextTree);
-        const currentWindowIds = new Set(windows.map(w => w.id));
-        const allMatch = treeWindowIds.every(id => currentWindowIds.has(id));
-        if (allMatch) {
-          tileTree = nextTree;
-        }
-      }
-      floatedTileIds = nextFloated;
-      if (workspaceMode === "tiled") {
-        if (fabricEl) {
-          const rect = fabricEl.getBoundingClientRect();
-          tiledViewport = { width: rect.width, height: rect.height };
-        }
-        void applyTiledLayout();
-      }
-    });
+    workspaceMode =
+      localStorage.getItem("sshx-workspace-mode") === "tiled"
+        ? "tiled"
+        : "floating";
     // If the restored mode is tiled, lay out the tiles against the actual
     // viewport once the panel is mounted.
     if (workspaceMode === "tiled") {
@@ -1326,14 +1521,21 @@
     document.addEventListener("gesturechange", preventPageGesture);
     document.addEventListener("keydown", handleTilingKeydown, true);
     document.addEventListener("keyup", handleTilingKeyup, true);
-    document.addEventListener("pointerdown", handleTiledReorderPointerDown, true);
+    document.addEventListener(
+      "pointerdown",
+      handleTiledReorderPointerDown,
+      true,
+    );
     document.addEventListener("pointermove", handleTiledReorderPointerMove);
     document.addEventListener("pointerup", handleTiledReorderPointerUp);
     document.addEventListener("pointercancel", handleTiledReorderPointerUp);
     collabConn = new CollabConnection((status) => {
       collabStatus = status;
       if (status === "auth-failed") {
-        makeToast({ kind: "error", message: "Collaborative workspace authentication failed." });
+        makeToast({
+          kind: "error",
+          message: "Collaborative workspace authentication failed.",
+        });
       }
     });
     connect();
@@ -1352,7 +1554,6 @@
   onDestroy(() => {
     manualClose = true;
     window.clearTimeout(layoutAnimationTimer);
-    window.clearTimeout(splittersTimer);
     window.cancelAnimationFrame(activeViewAnimation);
     window.clearInterval(pingTimer);
     window.clearTimeout(reconnectTimer);
@@ -1360,19 +1561,27 @@
     document.removeEventListener("gesturechange", preventPageGesture);
     document.removeEventListener("keydown", handleTilingKeydown, true);
     document.removeEventListener("keyup", handleTilingKeyup, true);
-    document.removeEventListener("pointerdown", handleTiledReorderPointerDown, true);
+    document.removeEventListener(
+      "pointerdown",
+      handleTiledReorderPointerDown,
+      true,
+    );
     document.removeEventListener("pointermove", handleTiledReorderPointerMove);
     document.removeEventListener("pointerup", handleTiledReorderPointerUp);
     document.removeEventListener("pointercancel", handleTiledReorderPointerUp);
     drawingShapes.unobserve(refreshShapes);
-    unobserveTiledLayout?.();
     collabConn?.destroy();
     socket?.close();
   });
 </script>
 
 <ToastContainer />
-<svelte:window on:keydown={handleDrawingKeydown} on:resize={() => { if (workspaceMode === "tiled") void applyTiledLayout(); }} />
+<svelte:window
+  on:keydown={handleDrawingKeydown}
+  on:resize={() => {
+    if (workspaceMode === "tiled") void applyTiledLayout();
+  }}
+/>
 {#if authenticated}
   <ChooseName />
 {/if}
@@ -1385,9 +1594,9 @@
   bind:this={fabricEl}
   class:cursor-grabbing={panning}
   on:pointerdown={handlePointerDown}
-  on:pointermove={(event) => { moveTileSplit(event); handlePointerMove(event); }}
-  on:pointerup={(event) => { stopTileSplit(); handlePointerUp(event); }}
-  on:pointercancel={(event) => { stopTileSplit(); handlePointerUp(event); }}
+  on:pointermove={handlePointerMove}
+  on:pointerup={handlePointerUp}
+  on:pointercancel={handlePointerUp}
   on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
@@ -1406,19 +1615,26 @@
 
   <div class="absolute top-4 right-4 z-[10000] flex items-start gap-3">
     <div class="relative">
-      <WorkspaceMode mode={workspaceMode} onChange={(mode) => setWorkspaceMode(mode)} />
+      <WorkspaceMode
+        mode={workspaceMode}
+        onChange={(mode) => setWorkspaceMode(mode)}
+      />
     </div>
     <div class="flex items-center gap-3 pt-1">
       <!-- The full name list crowds the toolbar on phones; avatars suffice. -->
       <div class="hidden sm:block">
         <NameList users={usersForUI} />
       </div>
-      <Avatars users={usersForUI} />
+      <div class="block sm:hidden">
+        <Avatars users={usersForUI} />
+      </div>
     </div>
   </div>
 
   {#if showNetworkInfo}
-    <div class="absolute top-24 left-4 z-[10000] w-[360px] max-w-[calc(100vw-2rem)]">
+    <div
+      class="absolute top-24 left-4 z-[10000] w-[360px] max-w-[calc(100vw-2rem)]"
+    >
       <NetworkInfo
         status={connected ? "connected" : "no-server"}
         {serverLatency}
@@ -1427,60 +1643,33 @@
     </div>
   {/if}
 
-  <div data-pan-surface class="hypr-surface absolute inset-0" class:cursor-crosshair={drawingMode} class:tile-layout-animating={layoutAnimating}>
+  <div
+    data-pan-surface
+    class="hypr-surface absolute inset-0"
+    class:cursor-crosshair={drawingMode}
+    class:tile-layout-animating={layoutAnimating}
+  >
     <!-- touch-action: none lets our pointer handlers own one-finger pans and
          two-finger pinches without the browser hijacking the gesture. Windows
          float above this layer, so terminal/editor touch scrolling is unaffected. -->
-    <div class="absolute cursor-grab inset-0 opacity-20" style="touch-action: none; background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 * zoom}px {32 * zoom}px; background-position: {viewportX}px {viewportY}px;"></div>
+    <div
+      class="absolute cursor-grab inset-0 opacity-20"
+      style="touch-action: none; background-image: radial-gradient(circle, #71717a 1px, transparent 1px); background-size: {32 *
+        zoom}px {32 *
+        zoom}px; background-position: {viewportX}px {viewportY}px;"
+    ></div>
     <button
       class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-2 sm:py-1 text-xs text-zinc-300"
       data-no-pan
       title="Reset zoom to 100%"
-      on:click={resetZoom}
-    >zoom {Math.round(zoom * 100)}%</button>
+      on:click={resetZoom}>zoom {Math.round(zoom * 100)}%</button
+    >
 
-    <div class="absolute left-0 top-0 origin-top-left" style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;">
-    {#each displayWindows as windowState (windowState.id)}
-      {#if windowState.kind === "shell"}
-        <WebTerm
-          bind:this={termRefs[windowState.id]}
-          shell={windowState}
-          output={outputs[windowState.id] ?? ""}
-          zIndex={windowState.zIndex ?? 1}
-          focused={focusedWindowID === windowState.id}
-          tiled={workspaceMode === "tiled"}
-          {layoutAnimating}
-          tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
-          onFocus={(id) => focusWindow(id)}
-          onBlur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
-          onStartMove={(id, event) => startMove(id, event)}
-          onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
-          onInput={(id, data) => send({ type: "input", id, data })}
-          onResize={(id, cols, rows, width, height) => {
-            windows = windows.map((w) => w.id === id ? { ...w, cols, rows, width, height } : w);
-            send({ type: "patch", id, patch: { cols, rows, width, height } });
-          }}
-          onClose={(id) => closeWindow(id)}
-        />
-      {:else}
-        <EditorWindow
-          {windowState}
-          zIndex={windowState.zIndex ?? 1}
-          focused={focusedWindowID === windowState.id}
-          tiled={workspaceMode === "tiled"}
-          {layoutAnimating}
-          tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
-          onFocus={(id) => focusWindow(id)}
-          onStartMove={(id, event) => startMove(id, event)}
-          onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
-          onClose={(id) => closeWindow(id)}
-        />
-      {/if}
-    {/each}
-
-    {#if workspaceMode === "tiled"}
-      <!-- Floated-out tiles render as real floating windows above the grid. -->
-      {#each floatedOverlays as windowState (windowState.id)}
+    <div
+      class="absolute left-0 top-0 origin-top-left"
+      style="transform: translate({viewportX}px, {viewportY}px) scale({zoom}); width: 1px; height: 1px;"
+    >
+      {#each displayWindows as windowState (windowState.id)}
         {#if windowState.kind === "shell"}
           <WebTerm
             bind:this={termRefs[windowState.id]}
@@ -1488,16 +1677,21 @@
             output={outputs[windowState.id] ?? ""}
             zIndex={windowState.zIndex ?? 1}
             focused={focusedWindowID === windowState.id}
-            tiled={false}
+            tiled={workspaceMode === "tiled"}
             {layoutAnimating}
-            tilePaneId={null}
+            tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
             onFocus={(id) => focusWindow(id)}
-            onBlur={() => { if (focusedWindowID === windowState.id) focusedWindowID = -1; }}
+            onBlur={() => {
+              if (focusedWindowID === windowState.id) focusedWindowID = -1;
+            }}
             onStartMove={(id, event) => startMove(id, event)}
-            onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+            onStartResize={(id, event, width, height) =>
+              startResize(id, event, width, height)}
             onInput={(id, data) => send({ type: "input", id, data })}
             onResize={(id, cols, rows, width, height) => {
-              windows = windows.map((w) => w.id === id ? { ...w, cols, rows, width, height } : w);
+              windows = windows.map((w) =>
+                w.id === id ? { ...w, cols, rows, width, height } : w,
+              );
               send({ type: "patch", id, patch: { cols, rows, width, height } });
             }}
             onClose={(id) => closeWindow(id)}
@@ -1507,55 +1701,115 @@
             {windowState}
             zIndex={windowState.zIndex ?? 1}
             focused={focusedWindowID === windowState.id}
-            tiled={false}
+            tiled={workspaceMode === "tiled"}
             {layoutAnimating}
-            tilePaneId={null}
+            tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
             onFocus={(id) => focusWindow(id)}
             onStartMove={(id, event) => startMove(id, event)}
-            onStartResize={(id, event, width, height) => startResize(id, event, width, height)}
+            onStartResize={(id, event, width, height) =>
+              startResize(id, event, width, height)}
             onClose={(id) => closeWindow(id)}
           />
         {/if}
       {/each}
-    {/if}
 
-    {#each otherUsersForUI as [id, user] (id)}
-      {#if user.cursor}
-        <div class="pointer-events-none absolute z-[9999]" style="transform: translate({user.cursor[0]}px, {user.cursor[1]}px);">
-          <LiveCursor {user} />
-        </div>
+      {#if workspaceMode === "tiled"}
+        <!-- Floated-out tiles render as real floating windows above the grid. -->
+        {#each floatedOverlays as windowState (windowState.id)}
+          {#if windowState.kind === "shell"}
+            <WebTerm
+              bind:this={termRefs[windowState.id]}
+              shell={windowState}
+              output={outputs[windowState.id] ?? ""}
+              zIndex={windowState.zIndex ?? 1}
+              focused={focusedWindowID === windowState.id}
+              tiled={false}
+              {layoutAnimating}
+              tilePaneId={null}
+              onFocus={(id) => focusWindow(id)}
+              onBlur={() => {
+                if (focusedWindowID === windowState.id) focusedWindowID = -1;
+              }}
+              onStartMove={(id, event) => startMove(id, event)}
+              onStartResize={(id, event, width, height) =>
+                startResize(id, event, width, height)}
+              onInput={(id, data) => send({ type: "input", id, data })}
+              onResize={(id, cols, rows, width, height) => {
+                windows = windows.map((w) =>
+                  w.id === id ? { ...w, cols, rows, width, height } : w,
+                );
+                send({
+                  type: "patch",
+                  id,
+                  patch: { cols, rows, width, height },
+                });
+              }}
+              onClose={(id) => closeWindow(id)}
+            />
+          {:else}
+            <EditorWindow
+              {windowState}
+              zIndex={windowState.zIndex ?? 1}
+              focused={focusedWindowID === windowState.id}
+              tiled={false}
+              {layoutAnimating}
+              tilePaneId={null}
+              onFocus={(id) => focusWindow(id)}
+              onStartMove={(id, event) => startMove(id, event)}
+              onStartResize={(id, event, width, height) =>
+                startResize(id, event, width, height)}
+              onClose={(id) => closeWindow(id)}
+            />
+          {/if}
+        {/each}
       {/if}
-    {/each}
 
-    <svg class="pointer-events-none absolute left-0 top-0 z-[9998] h-px w-px overflow-visible" aria-label="Collaborative world drawings">
-      {#each shapes as shape (shape.id)}
-        <path
-          d={pathData(shape)}
-          fill="none"
-          stroke={shape.color}
-          stroke-width={shape.strokeWidth}
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
+      {#each otherUsersForUI as [id, user] (id)}
+        {#if user.cursor}
+          <div
+            class="pointer-events-none absolute z-[9999]"
+            style="transform: translate({user.cursor[0]}px, {user
+              .cursor[1]}px);"
+          >
+            <LiveCursor {user} />
+          </div>
+        {/if}
       {/each}
-      {#if draftShape}
-        <path
-          d={pathData(draftShape)}
-          fill="none"
-          stroke={draftShape.color}
-          stroke-width={draftShape.strokeWidth}
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          opacity="0.9"
-        />
-      {/if}
-    </svg>
+
+      <svg
+        class="pointer-events-none absolute left-0 top-0 z-[9998] h-px w-px overflow-visible"
+        aria-label="Collaborative world drawings"
+      >
+        {#each shapes as shape (shape.id)}
+          <path
+            d={pathData(shape)}
+            fill="none"
+            stroke={shape.color}
+            stroke-width={shape.strokeWidth}
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        {/each}
+        {#if draftShape}
+          <path
+            d={pathData(draftShape)}
+            fill="none"
+            stroke={draftShape.color}
+            stroke-width={draftShape.strokeWidth}
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            opacity="0.9"
+          />
+        {/if}
+      </svg>
     </div>
   </div>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <svg
-    class={drawingMode ? "pointer-events-auto fixed inset-0 z-[11000] h-full w-full cursor-crosshair" : "pointer-events-none fixed inset-0 z-[11000] h-full w-full"}
+    class={drawingMode
+      ? "pointer-events-auto fixed inset-0 z-[11000] h-full w-full cursor-crosshair"
+      : "pointer-events-none fixed inset-0 z-[11000] h-full w-full"}
     style="touch-action: none;"
     role="application"
     on:pointerdown={startCanvasDrawing}
@@ -1567,19 +1821,32 @@
   ></svg>
 
   {#if drawingMode}
-    <section class="fixed bottom-4 left-1/2 z-[12000] w-[min(calc(100vw-2rem),620px)] -translate-x-1/2 rounded-2xl border border-indigo-300/25 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur" data-no-pan aria-label="Drawing tools">
+    <section
+      class="fixed bottom-4 left-1/2 z-[12000] w-[min(calc(100vw-2rem),620px)] -translate-x-1/2 rounded-2xl border border-indigo-300/25 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur"
+      data-no-pan
+      aria-label="Drawing tools"
+    >
       <div class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-2">
-          <span class="grid h-8 w-8 place-items-center rounded-xl bg-indigo-500/20 text-indigo-200">✎</span>
+          <span
+            class="grid h-8 w-8 place-items-center rounded-xl bg-indigo-500/20 text-indigo-200"
+            >✎</span
+          >
           <div>
             <p class="text-sm font-semibold text-white">Draw</p>
             <p class="text-[11px] text-zinc-400">Esc returns to pointer</p>
           </div>
         </div>
-        <button class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-400" on:click={() => (drawingMode = false)}>Done <kbd class="ml-1 text-zinc-500">Esc</kbd></button>
+        <button
+          class="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          on:click={() => (drawingMode = false)}
+          >Done <kbd class="ml-1 text-zinc-500">Esc</kbd></button
+        >
       </div>
 
-      <div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-white/10 pt-3">
+      <div
+        class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-white/10 pt-3"
+      >
         <fieldset class="flex items-center gap-2" aria-label="Stroke color">
           <legend class="sr-only">Stroke color</legend>
           <span class="text-xs font-medium text-zinc-400">Color</span>
@@ -1594,11 +1861,23 @@
                 aria-pressed={drawingColor === color.value}
                 title={color.name}
                 on:click={() => (drawingColor = color.value)}
-              ><span class="h-5 w-5 rounded-full border border-black/20" style={`background: ${color.value}`}></span></button>
+                ><span
+                  class="h-5 w-5 rounded-full border border-black/20"
+                  style={`background: ${color.value}`}
+                ></span></button
+              >
             {/each}
-            <label class="relative grid h-7 w-7 cursor-pointer place-items-center overflow-hidden rounded-full border border-zinc-600 bg-zinc-800 text-base" title="Custom color">
+            <label
+              class="relative grid h-7 w-7 cursor-pointer place-items-center overflow-hidden rounded-full border border-zinc-600 bg-zinc-800 text-base"
+              title="Custom color"
+            >
               <span aria-hidden="true">+</span>
-              <input class="absolute inset-0 h-full w-full cursor-pointer opacity-0" type="color" bind:value={drawingColor} aria-label="Custom drawing color" />
+              <input
+                class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                type="color"
+                bind:value={drawingColor}
+                aria-label="Custom drawing color"
+              />
             </label>
           </div>
         </fieldset>
@@ -1608,26 +1887,54 @@
           <span class="text-xs font-medium text-zinc-400">Size</span>
           <div class="flex rounded-lg bg-zinc-900 p-1 ring-1 ring-white/10">
             {#each drawingWidths as width (width.value)}
-              <button type="button" class="grid h-7 w-9 place-items-center rounded-md transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" class:bg-indigo-500={width.value} aria-label={`${width.name} stroke`} aria-pressed={drawingStrokeWidth === width.value} title={width.name} on:click={() => (drawingStrokeWidth = width.value)}>
-                <span class="rounded-full bg-white" style={`width: ${Math.max(5, width.value * 2)}px; height: ${Math.max(5, width.value * 2)}px`}></span>
+              <button
+                type="button"
+                class="grid h-7 w-9 place-items-center rounded-md transition hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                class:bg-indigo-500={width.value}
+                aria-label={`${width.name} stroke`}
+                aria-pressed={drawingStrokeWidth === width.value}
+                title={width.name}
+                on:click={() => (drawingStrokeWidth = width.value)}
+              >
+                <span
+                  class="rounded-full bg-white"
+                  style={`width: ${Math.max(5, width.value * 2)}px; height: ${Math.max(5, width.value * 2)}px`}
+                ></span>
               </button>
             {/each}
           </div>
         </fieldset>
 
         <div class="ml-auto flex items-center gap-2">
-          <button class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40" disabled={!shapes.some((shape) => shape.createdBy === clientID)} on:click={undoLastDrawing} title="Undo your last stroke">Undo</button>
-          <button class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-red-500/15 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-40" disabled={!shapes.some((shape) => shape.createdBy === clientID)} on:click={clearMyDrawings} title="Remove all of your strokes">Clear mine</button>
+          <button
+            class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!shapes.some((shape) => shape.createdBy === clientID)}
+            on:click={undoLastDrawing}
+            title="Undo your last stroke">Undo</button
+          >
+          <button
+            class="rounded-lg px-2.5 py-2 text-xs text-zinc-300 transition hover:bg-red-500/15 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!shapes.some((shape) => shape.createdBy === clientID)}
+            on:click={clearMyDrawings}
+            title="Remove all of your strokes">Clear mine</button
+          >
         </div>
       </div>
     </section>
   {/if}
 
   {#if authRequired && !authenticated}
-    <div class="fixed inset-0 z-[20000] grid place-items-center bg-black/40 backdrop-blur-sm">
-      <form class="panel w-[min(92vw,420px)] p-6" on:submit|preventDefault={submitPassword}>
+    <div
+      class="fixed inset-0 z-[20000] grid place-items-center bg-black/40 backdrop-blur-sm"
+    >
+      <form
+        class="panel w-[min(92vw,420px)] p-6"
+        on:submit|preventDefault={submitPassword}
+      >
         <h2 class="mb-2 text-xl font-medium">Password Required</h2>
-        <p class="mb-4 text-sm text-zinc-400">Enter the shared password to access this sshit session.</p>
+        <p class="mb-4 text-sm text-zinc-400">
+          Enter the shared password to access this sshit session.
+        </p>
         <input
           class="mb-2 w-full rounded border border-zinc-700 bg-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500/50"
           type="password"
@@ -1638,7 +1945,10 @@
         {#if authError}
           <p class="mb-3 text-sm text-red-300">{authError}</p>
         {/if}
-        <button class="mt-2 rounded bg-pink-700 px-4 py-2 font-medium hover:bg-pink-600" type="submit">
+        <button
+          class="mt-2 rounded bg-pink-700 px-4 py-2 font-medium hover:bg-pink-600"
+          type="submit"
+        >
           Unlock
         </button>
       </form>

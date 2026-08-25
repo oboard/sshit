@@ -53,9 +53,10 @@ type Window struct {
 
 // Snapshot is the full restorable workspace state.
 type Snapshot struct {
-	Version int      `json:"version"`
-	IDSeq   int64    `json:"idSeq"`
-	Windows []Window `json:"windows"`
+	Version    int             `json:"version"`
+	IDSeq      int64           `json:"idSeq"`
+	Windows    []Window        `json:"windows"`
+	TileLayout json.RawMessage `json:"tileLayout,omitempty"`
 }
 
 const snapshotVersion = 1

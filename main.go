@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
@@ -265,6 +266,7 @@ type wsEnvelope struct {
 	Data        string          `json:"data,omitempty"`
 	Password    string          `json:"password,omitempty"`
 	Update      string          `json:"update,omitempty"`
+	TileLayout  json.RawMessage `json:"tileLayout,omitempty"`
 	Kind        string          `json:"kind,omitempty"`
 	DocID       string          `json:"docId,omitempty"`
 	Users       []webUser       `json:"users"`
@@ -387,6 +389,7 @@ type webHub struct {
 	password      string
 	collabClients map[*collabClient]bool
 	collabUpdates [][]byte
+	tileLayout    json.RawMessage
 
 	persistDir  string
 	persist     bool
@@ -431,10 +434,31 @@ func (h *webHub) snapshotLocked(includeBuffers bool) (users []webUser, windows [
 	return users, windows
 }
 
+func (h *webHub) tileLayoutLocked() json.RawMessage {
+	return append(json.RawMessage(nil), h.tileLayout...)
+}
+
 func (h *webHub) markDirty() {
 	h.mu.Lock()
 	h.dirty = true
 	h.mu.Unlock()
+}
+
+// setTileLayout stores the complete tiled-layout snapshot received over the
+// normal workspace socket. The JSON is validated before it becomes room state.
+func (h *webHub) setTileLayout(layout json.RawMessage) {
+	if !json.Valid(layout) {
+		return
+	}
+	h.mu.Lock()
+	if bytes.Equal(h.tileLayout, layout) {
+		h.mu.Unlock()
+		return
+	}
+	h.tileLayout = append(h.tileLayout[:0], layout...)
+	h.dirty = true
+	h.mu.Unlock()
+	h.broadcastState()
 }
 
 func (h *webHub) broadcast(msg wsEnvelope) {
@@ -469,7 +493,10 @@ func (h *webHub) broadcastState() {
 	// client repeatedly.
 	users, windows := h.snapshotLocked(false)
 	h.mu.Unlock()
-	h.broadcast(wsEnvelope{Type: "state", Users: users, Windows: windows})
+	h.mu.Lock()
+	tileLayout := h.tileLayoutLocked()
+	h.mu.Unlock()
+	h.broadcast(wsEnvelope{Type: "state", Users: users, Windows: windows, TileLayout: tileLayout})
 }
 
 func (h *webHub) addClient(conn *websocket.Conn) *webClient {
@@ -716,6 +743,7 @@ func (h *webHub) restore() bool {
 	if len(snap.Windows) == 0 {
 		return false
 	}
+	h.tileLayout = append(json.RawMessage(nil), snap.TileLayout...)
 
 	// Reload the collaborative document (markdown content and drawings) so
 	// editor windows come back with their contents, not just their frames.
@@ -859,7 +887,11 @@ func (h *webHub) snapshot() error {
 	}
 	h.dirty = false
 
-	snap := &persist.Snapshot{IDSeq: h.idSeq, Windows: make([]persist.Window, 0, len(h.windows))}
+	snap := &persist.Snapshot{
+		IDSeq:      h.idSeq,
+		Windows:    make([]persist.Window, 0, len(h.windows)),
+		TileLayout: append(json.RawMessage(nil), h.tileLayout...),
+	}
 	collabUpdates := make([][]byte, len(h.collabUpdates))
 	for i, u := range h.collabUpdates {
 		collabUpdates[i] = append([]byte(nil), u...)
@@ -1114,7 +1146,13 @@ func webSocketCollab(hub *webHub) http.HandlerFunc {
 		defer conn.Close()
 		conn.SetReadLimit(4 << 20)
 
-		client := &collabClient{conn: conn, send: make(chan collabMessage, 256)}
+		// Authentication replays every persisted Yjs update before `ready`. Size
+		// the queue for that backlog (plus live updates) so a valid long-lived
+		// editor history cannot be rejected with an abrupt 1006 close.
+		hub.mu.Lock()
+		historyCapacity := len(hub.collabUpdates) + 64
+		hub.mu.Unlock()
+		client := &collabClient{conn: conn, send: make(chan collabMessage, historyCapacity)}
 		defer hub.removeCollabClient(client)
 		defer hub.clearCollabAwareness(client)
 
@@ -1225,8 +1263,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					hub.clients[client.id] = client
 				}
 				users, windows := hub.snapshotLocked(true)
+				tileLayout := hub.tileLayoutLocked()
 				hub.mu.Unlock()
-				client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows}
+				client.send <- wsEnvelope{Type: "hello", ID: int64(client.id), Users: users, Windows: windows, TileLayout: tileLayout}
 				hub.broadcastState()
 			case "setName":
 				if !client.authenticated {
@@ -1270,6 +1309,11 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 				if msg.Patch != nil {
 					hub.patchWindow(msg.ID, *msg.Patch)
 				}
+			case "tileLayout":
+				if !client.authenticated || len(msg.TileLayout) == 0 {
+					continue
+				}
+				hub.setTileLayout(msg.TileLayout)
 			case "close":
 				if !client.authenticated {
 					continue

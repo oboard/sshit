@@ -34,6 +34,7 @@ export function getActiveCollab() {
 export class CollabConnection {
   private socket: WebSocket | null = null;
   private reconnectTimer: number | undefined;
+  private reconnectAttempt = 0;
   private manualClose = false;
   private password = "";
   private name = "";
@@ -59,6 +60,8 @@ export class CollabConnection {
     this.name = name || this.name;
     this.userID = userID || this.userID;
     this.manualClose = false;
+    window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     this.statusListener("connecting");
     this.socket?.close();
 
@@ -83,6 +86,9 @@ export class CollabConnection {
           };
           if (message.type === "ready") {
             this.clientID = message.clientId ?? "";
+            this.reconnectAttempt = 0;
+            window.clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = undefined;
             this.statusListener("connected");
           } else if (message.type === "authFailed") {
             this.statusListener("auth-failed");
@@ -109,13 +115,20 @@ export class CollabConnection {
       Y.applyUpdate(ydoc, update, this);
     };
 
-    socket.onclose = () => {
-      if (this.socket === socket) this.socket = null;
-      if (!this.manualClose) {
-        this.statusListener("disconnected");
-        window.clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = window.setTimeout(() => this.connect(), 1000);
-      }
+    socket.onclose = (event) => {
+      // `connect()` intentionally closes the previous socket. Ignore that
+      // socket's close event: only the active socket may schedule a reconnect.
+      if (this.socket !== socket) return;
+      this.socket = null;
+      if (this.manualClose || event.code === 1008) return;
+
+      this.statusListener("disconnected");
+      window.clearTimeout(this.reconnectTimer);
+      // Exponential backoff stops a failing server connection from hammering
+      // `/collab`; a successful `ready` resets this counter.
+      const delay = Math.min(10_000, 1_000 * 2 ** this.reconnectAttempt++);
+      console.warn(`collab socket closed (code ${event.code}${event.reason ? `: ${event.reason}` : ""}); retrying in ${delay}ms`);
+      this.reconnectTimer = window.setTimeout(() => this.connect(), delay);
     };
 
     socket.onerror = () => {
