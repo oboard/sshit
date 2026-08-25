@@ -14,6 +14,7 @@
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let tileResizing = false;
   export let tilePaneId: number | null = null;
   export let onClose: (id: number) => void = () => {};
   export let onFocus: (id: number) => void = () => {};
@@ -34,6 +35,7 @@
   {focused}
   {tiled}
   {layoutAnimating}
+  {tileResizing}
   background="#111111"
   ariaLabel={title}
   resizeLabel="Resize {title}"

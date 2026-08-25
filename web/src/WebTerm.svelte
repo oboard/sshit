@@ -16,6 +16,7 @@
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let tileResizing = false;
   export let tilePaneId: number | null = null;
   export let onInput: (id: number, data: string) => void = () => {};
   export let onResize: (id: number, cols: number, rows: number, width: number, height: number) => void = () => {};
@@ -82,6 +83,11 @@
     }
     fitAddon.fit();
     return { cols: terminal.cols, rows: terminal.rows };
+  }
+
+  /** Fit against the floating window's real content box and update its PTY. */
+  export function fitAndReportSize() {
+    fitAndReport(true);
   }
 
   function scheduleTerminalFit() {
@@ -263,6 +269,7 @@
   {focused}
   {tiled}
   {layoutAnimating}
+  {tileResizing}
   background={theme.background}
   ariaLabel={currentTitle}
   resizeLabel="Resize terminal"

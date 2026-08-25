@@ -18,6 +18,7 @@
   export let resizeLabel = `Resize ${title}`;
   export let tiled = false;
   export let layoutAnimating = false;
+  export let tileResizing = false;
   export let tilePaneId: number | null = null;
   export let onClose: (id: number) => void = () => {};
   export let onYellow: (id: number) => void = () => {};
@@ -36,7 +37,7 @@
   $: isDraggedTile = tiled && zIndex >= 1000;
 
   beforeUpdate(() => {
-    if (tiled && !layoutAnimating && !isDraggedTile && frameEl) {
+    if (tiled && !layoutAnimating && !tileResizing && !isDraggedTile && frameEl) {
       beforeRect = frameEl.getBoundingClientRect();
     } else {
       beforeRect = null;
@@ -47,7 +48,7 @@
     // Mode changes already animate the outer coordinate transform. Clearing the
     // FLIP baseline here prevents an extra scale animation when that transition
     // finishes and `layoutAnimating` becomes false.
-    if (!tiled || layoutAnimating || isDraggedTile || !frameEl || !contentEl) {
+    if (!tiled || layoutAnimating || tileResizing || isDraggedTile || !frameEl || !contentEl) {
       beforeRect = null;
       return;
     }

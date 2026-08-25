@@ -86,7 +86,18 @@
   let focusedWindowID = -1;
   let workspaceMode: "floating" | "tiled" = "floating";
   let tiledViewport = { width: 0, height: 0 };
+  type TileSplit = {
+    id: string;
+    axis: TileAxis;
+    ratio: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   let tileTree: TileNode | null = null;
+  let tileSplits: TileSplit[] = [];
+  let activeTileSplit: string | null = null;
   let layoutAnimating = false;
   let layoutAnimationTimer: number | undefined;
   // Windows floated out of the tiled tree (drag-out). They render as floating
@@ -766,6 +777,7 @@
     );
 
     const result: WindowState[] = [];
+    const splits: TileSplit[] = [];
 
     function visit(
       node: TileNode,
@@ -790,10 +802,12 @@
       }
       if (node.axis === "vertical") {
         const firstWidth = Math.round(width * node.ratio);
+        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x: x + firstWidth, y, width, height });
         visit(node.first, x, y, firstWidth, height);
         visit(node.second, x + firstWidth, y, width - firstWidth, height);
       } else {
         const firstHeight = Math.round(height * node.ratio);
+        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x, y: y + firstHeight, width, height });
         visit(node.first, x, y, width, firstHeight);
         visit(node.second, x, y + firstHeight, width, height - firstHeight);
       }
@@ -806,7 +820,53 @@
       viewport.width,
       Math.max(1, viewport.height - topInset),
     );
+    tileSplits = splits;
     return result;
+  }
+
+  function updateTileRatio(node: TileNode | null, id: string, ratio: number): TileNode | null {
+    if (!node || "windowId" in node) return node;
+    if (node.id === id) return { ...node, ratio };
+    return {
+      ...node,
+      first: updateTileRatio(node.first, id, ratio)!,
+      second: updateTileRatio(node.second, id, ratio)!,
+    };
+  }
+
+  function startTileSplit(id: string, event: PointerEvent) {
+    if (workspaceMode !== "tiled" || tiledReorderDrag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activeTileSplit = id;
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  function moveTileSplit(event: PointerEvent) {
+    if (!activeTileSplit || !fabricEl) return;
+    const split = tileSplits.find((candidate) => candidate.id === activeTileSplit);
+    if (!split) return;
+    event.preventDefault();
+    const rect = fabricEl.getBoundingClientRect();
+    const pointer = (split.axis === "vertical"
+      ? event.clientX - rect.left - viewportX
+      : event.clientY - rect.top - viewportY) / zoom;
+    const origin = split.axis === "vertical" ? split.x - split.ratio * split.width : split.y - split.ratio * split.height;
+    const ratio = (pointer - origin) / Math.max(1, split.axis === "vertical" ? split.width : split.height);
+    tileTree = updateTileRatio(tileTree, activeTileSplit, Math.max(0.12, Math.min(0.88, ratio)));
+  }
+
+  function stopTileSplit() {
+    if (!activeTileSplit) return;
+    activeTileSplit = null;
+    persistTiledLayout();
+    void applyTiledLayout();
+  }
+
+  function refitFloatingTerminals() {
+    for (const windowState of windows) {
+      if (windowState.kind === "shell") termRefs[windowState.id]?.fitAndReportSize();
+    }
   }
 
   async function applyTiledLayout() {
@@ -840,10 +900,12 @@
     }
     layoutAnimating = true;
     window.clearTimeout(layoutAnimationTimer);
-    layoutAnimationTimer = window.setTimeout(
-      () => (layoutAnimating = false),
-      480,
-    );
+    layoutAnimationTimer = window.setTimeout(() => {
+      layoutAnimating = false;
+      // Once the tiled-to-floating geometry transition has reached its real
+      // content boxes, recalculate terminal grids and resize their PTYs.
+      if (nextMode === "floating") requestAnimationFrame(refitFloatingTerminals);
+    }, 480);
     if (nextMode === "tiled") {
       // Remember the free-canvas camera exactly as the user left it. Tiled mode
       // is only a local presentation layer and must never discard this state.
@@ -1607,6 +1669,54 @@
   });
 </script>
 
+<style>
+  .tile-split-hitbox {
+    touch-action: none;
+    cursor: col-resize;
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+
+  /* Keep the generous hit area invisible until the pointer reaches the pane gap. */
+  .tile-split-hitbox:hover,
+  .tile-split-active {
+    opacity: 1;
+  }
+
+  .tile-split-horizontal {
+    cursor: row-resize;
+  }
+
+  .tile-split-pill {
+    pointer-events: none;
+    border: 1px solid rgb(255 255 255 / 0.16);
+    background: rgb(39 39 42 / 0.88);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.3), inset 0 1px rgb(255 255 255 / 0.12);
+    transition: width 160ms ease, height 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  }
+
+  .tile-split-vertical .tile-split-pill {
+    width: 5px;
+    height: 48px;
+    border-radius: 999px;
+  }
+
+  .tile-split-horizontal .tile-split-pill {
+    width: 48px;
+    height: 5px;
+    border-radius: 999px;
+  }
+
+  .tile-split-hitbox:hover .tile-split-pill,
+  .tile-split-active .tile-split-pill {
+    background: rgb(165 243 252 / 0.95);
+    box-shadow: 0 2px 14px rgb(34 211 238 / 0.42), inset 0 1px rgb(255 255 255 / 0.55);
+  }
+
+  .tile-split-vertical.tile-split-active .tile-split-pill { width: 7px; }
+  .tile-split-horizontal.tile-split-active .tile-split-pill { height: 7px; }
+</style>
+
 <ToastContainer />
 <svelte:window
   on:keydown={handleDrawingKeydown}
@@ -1626,9 +1736,9 @@
   bind:this={fabricEl}
   class:cursor-grabbing={panning}
   on:pointerdown={handlePointerDown}
-  on:pointermove={handlePointerMove}
-  on:pointerup={handlePointerUp}
-  on:pointercancel={handlePointerUp}
+  on:pointermove={(event) => { moveTileSplit(event); handlePointerMove(event); }}
+  on:pointerup={(event) => { stopTileSplit(); handlePointerUp(event); }}
+  on:pointercancel={(event) => { stopTileSplit(); handlePointerUp(event); }}
   on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
@@ -1711,6 +1821,7 @@
             focused={focusedWindowID === windowState.id}
             tiled={workspaceMode === "tiled"}
             {layoutAnimating}
+            tileResizing={activeTileSplit !== null}
             tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
             onFocus={(id) => focusWindow(id)}
             onBlur={() => {
@@ -1736,6 +1847,7 @@
             focused={focusedWindowID === windowState.id}
             tiled={workspaceMode === "tiled"}
             {layoutAnimating}
+            tileResizing={activeTileSplit !== null}
             tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
             onFocus={(id) => focusWindow(id)}
             onStartMove={(id, event) => startMove(id, event)}
@@ -1747,6 +1859,25 @@
       {/each}
 
       {#if workspaceMode === "tiled"}
+        <!-- iPad-style draggable split handles live in the existing 10px pane gap. -->
+        {#each tileSplits as split (split.id)}
+          <div
+            class="tile-split-hitbox absolute z-[500] grid place-items-center"
+            class:tile-split-active={activeTileSplit === split.id}
+            class:tile-split-vertical={split.axis === "vertical"}
+            class:tile-split-horizontal={split.axis === "horizontal"}
+            style={split.axis === "vertical"
+              ? `transform: translate(${split.x - 13}px, ${split.y}px); width: 28px; height: ${split.height}px;`
+              : `transform: translate(${split.x}px, ${split.y - 13}px); width: ${split.width}px; height: 28px;`}
+            data-no-pan
+            role="separator"
+            aria-label={split.axis === "vertical" ? "Adjust pane widths" : "Adjust pane heights"}
+            aria-orientation={split.axis === "vertical" ? "vertical" : "horizontal"}
+            on:pointerdown={(event) => startTileSplit(split.id, event)}
+          >
+            <span class="tile-split-pill"></span>
+          </div>
+        {/each}
         <!-- Floated-out tiles render as real floating windows above the grid. -->
         {#each floatedOverlays as windowState (windowState.id)}
           {#if windowState.kind === "shell"}
