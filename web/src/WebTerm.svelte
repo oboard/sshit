@@ -27,6 +27,7 @@
   export let onFocus: (id: number) => void = () => {};
   export let onBlur: (id: number) => void = () => {};
   export let onTitleChange: (id: number, title: string) => void = () => {};
+  export let onCwdChange: (id: number, cwd: string) => void = () => {};
   export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
@@ -41,9 +42,31 @@
       : path;
   }
 
+  function parseOsc7Cwd(value: string) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "file:") return "";
+      return decodeURIComponent(url.pathname);
+    } catch {
+      return "";
+    }
+  }
+
+  // xterm emits replies to OSC foreground/background/cursor color queries via
+  // onData, the same channel used for keyboard input. These replies belong to
+  // the terminal protocol, not the shell; forwarding them makes strings such
+  // as "11;rgb:ffff/ffff/ffff" appear at the prompt.
+  function stripTerminalColorReplies(data: string) {
+    return data.replace(
+      /\x1b\](?:10|11|12);rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\)/g,
+      "",
+    );
+  }
+
   let terminalReady = false;
+  let terminalTitle = "";
   $: fallbackTitle = abbreviateHomePath(shell.cwd || "") || "sshit shell";
-  $: currentTitle = shell.title || fallbackTitle;
+  $: currentTitle = terminalTitle || fallbackTitle;
   let renderedOutputLength = 0;
   let disposed = false;
   let terminalError = "";
@@ -62,6 +85,10 @@
   // before Motion finishes laying out its new slot.
   $: if (tiled && terminalReady && shell.width >= 0 && shell.height >= 0) {
     scheduleTerminalFit();
+  }
+
+  $: if (!terminalTitle && shell.title !== fallbackTitle) {
+    onTitleChange(shell.id, fallbackTitle);
   }
 
   $: if (terminalReady && terminal && output.length !== renderedOutputLength) {
@@ -238,11 +265,19 @@
       terminalResizeObserver = new ResizeObserver(scheduleTerminalFit);
       terminalResizeObserver.observe(termEl);
       terminalReady = true;
-      onTitleChange(shell.id, currentTitle);
       terminal.onTitleChange((title) => {
-        onTitleChange(shell.id, title || fallbackTitle);
+        terminalTitle = title;
+        onTitleChange(shell.id, terminalTitle || fallbackTitle);
       });
-      terminal.onData((data) => onInput(shell.id, data));
+      terminal.parser.registerOscHandler(7, (value) => {
+        const cwd = parseOsc7Cwd(value);
+        if (cwd) onCwdChange(shell.id, cwd);
+        return true;
+      });
+      terminal.onData((data) => {
+        const input = stripTerminalColorReplies(data);
+        if (input) onInput(shell.id, input);
+      });
       // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
       // available after open(), so use native focus events instead.
       terminal.textarea?.addEventListener("focus", () => onFocus(shell.id));

@@ -293,6 +293,12 @@
     );
   }
 
+  function handleShellCwdChange(id: number, cwd: string) {
+    windows = windows.map((windowState) =>
+      windowState.id === id ? { ...windowState, cwd } : windowState,
+    );
+  }
+
   function isShell(id: number) {
     return windowById(id)?.kind === "shell";
   }
@@ -1884,6 +1890,7 @@
               startResize(id, event, width, height)}
             onTiledResize={reportTiledPtyResize}
             onTitleChange={handleShellTitleChange}
+            onCwdChange={handleShellCwdChange}
             onInput={(id, data) => send({ type: "input", id, data })}
             onResize={(id, cols, rows, width, height) => {
               windows = windows.map((w) =>
@@ -1957,6 +1964,7 @@
               onStartResize={(id, event, width, height) =>
                 startResize(id, event, width, height)}
               onTitleChange={handleShellTitleChange}
+              onCwdChange={handleShellCwdChange}
               onInput={(id, data) => send({ type: "input", id, data })}
               onResize={(id, cols, rows, width, height) => {
                 windows = windows.map((w) =>

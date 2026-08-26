@@ -50,6 +50,51 @@ func defaultShell() string {
 	return shell
 }
 
+// shellWithCwdReporting launches the supported interactive shells with an OSC 7
+// prompt hook. OSC 7 reports $PWD to xterm immediately after a prompt redraw,
+// so a successful `cd` updates the web title without waiting for cwd polling.
+// Unknown shells retain their normal startup behavior and use polling as a
+// fallback.
+func shellWithCwdReporting(shell string) *exec.Cmd {
+	base := filepath.Base(shell)
+	osc7 := `printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$PWD"`
+
+	switch base {
+	case "bash":
+		rc, err := os.CreateTemp("", "sshit-bash-*.rc")
+		if err == nil {
+			_, _ = fmt.Fprintf(rc, "[ -f ~/.bashrc ] && . ~/.bashrc\n__sshit_osc7() { %s; }\nPROMPT_COMMAND=\"__sshit_osc7${PROMPT_COMMAND:+; $PROMPT_COMMAND}\"\n", osc7)
+			_ = rc.Close()
+			return exec.Command(shell, "--rcfile", rc.Name(), "-i")
+		}
+	case "zsh":
+		dir, err := os.MkdirTemp("", "sshit-zsh-")
+		if err == nil {
+			rcPath := filepath.Join(dir, ".zshrc")
+			rc := fmt.Sprintf("[ -f $HOME/.zshrc ] && source $HOME/.zshrc\n__sshit_osc7() { %s; }\nprecmd_functions+=(__sshit_osc7)\n", osc7)
+			if os.WriteFile(rcPath, []byte(rc), 0600) == nil {
+				cmd := exec.Command(shell, "-i")
+				cmd.Env = appendEnv(os.Environ(), "ZDOTDIR", dir)
+				return cmd
+			}
+		}
+	case "fish":
+		init := "function __sshit_osc7 --on-event fish_prompt; printf '\\e]7;file://%s%s\\e\\\\' (hostname) $PWD; end"
+		return exec.Command(shell, "--init-command", init, "-i")
+	}
+	return exec.Command(shell)
+}
+
+func terminalCommandEnv(term string, overrides []string) []string {
+	env := terminalEnv(term)
+	for _, item := range overrides {
+		if key, _, ok := strings.Cut(item, "="); ok {
+			env = appendEnv(env, key, strings.TrimPrefix(item, key+"="))
+		}
+	}
+	return env
+}
+
 func terminalEnv(term string) []string {
 	if term == "" || term == "dumb" {
 		term = "xterm-256color"
@@ -571,10 +616,10 @@ func (h *webHub) createShell(x, y int, cols, rows, width, height, zIndex int, cw
 	if len(command) > 0 {
 		cmd = exec.Command(command[0], command[1:]...)
 	} else {
-		cmd = exec.Command(defaultShell())
+		cmd = shellWithCwdReporting(defaultShell())
 	}
 	cmd.Dir = cwd
-	cmd.Env = terminalEnv("xterm-256color")
+	cmd.Env = terminalCommandEnv("xterm-256color", cmd.Env)
 	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
 		return nil, err
@@ -823,7 +868,7 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 	if len(command) > 0 {
 		cmd = exec.Command(command[0], command[1:]...)
 	} else {
-		cmd = exec.Command(defaultShell())
+		cmd = shellWithCwdReporting(defaultShell())
 	}
 	cwd := saved.Cwd
 	home, _ := os.UserHomeDir()
@@ -831,7 +876,7 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 		cwd = home
 	}
 	cmd.Dir = cwd
-	cmd.Env = terminalEnv("xterm-256color")
+	cmd.Env = terminalCommandEnv("xterm-256color", cmd.Env)
 	p, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: saved.Cols, Rows: saved.Rows})
 	if err != nil {
 		return err
@@ -872,14 +917,16 @@ func (h *webHub) restoreShell(saved persist.Window) error {
 	return nil
 }
 
-// snapshotLoop periodically persists the workspace when it has changed.
+// snapshotLoop periodically refreshes live shell metadata and persists the
+// workspace when it has changed.
 func (h *webHub) snapshotLoop(interval time.Duration) {
-	if !h.persist {
-		return
-	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
+		h.refreshAgents()
+		if !h.persist {
+			continue
+		}
 		if err := h.snapshot(); err != nil {
 			log.Printf("failed to persist session: %v", err)
 		}
@@ -889,10 +936,6 @@ func (h *webHub) snapshotLoop(interval time.Duration) {
 // snapshot writes the current window layout (and optional history) to disk if
 // anything changed since the last snapshot.
 func (h *webHub) snapshot() error {
-	// Refresh agent/session and live cwd metadata first so this snapshot
-	// captures them (the refresh itself may set dirty).
-	h.refreshAgents()
-
 	h.mu.Lock()
 	if !h.dirty {
 		h.mu.Unlock()
