@@ -1,40 +1,78 @@
 <script lang="ts">
-  import { afterUpdate, beforeUpdate, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { animate } from "motion";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
   import CircleButtons from "$lib/ui/CircleButtons.svelte";
 
-  export let id: number;
-  export let title: string;
-  export let x: number;
-  export let y: number;
-  export let width: number;
-  export let height: number;
-  export let zIndex = 1;
-  export let focused = false;
-  export let background = "#111111";
-  export let ariaLabel = title;
-  export let resizeLabel = `Resize ${title}`;
-  export let tiled = false;
-  export let layoutAnimating = false;
-  export let tileResizing = false;
-  export let tilePaneId: number | null = null;
-  export let onClose: (id: number) => void = () => {};
-  export let onYellow: (id: number) => void = () => {};
-  export let onGreen: (id: number) => void = () => {};
-  export let onFocus: (id: number) => void = () => {};
-  export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
-  export let onStartTiledMove: (id: number, event: PointerEvent) => void = () => {};
-  export let onMoveTiledMove: (event: PointerEvent) => void = () => {};
-  export let onFinishTiledMove: () => void = () => {};
-  export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
-  export let onTitlebarDoubleClick: (id: number) => void = () => {};
+  type Props = {
+    id: number;
+    title: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    zIndex?: number;
+    focused?: boolean;
+    background?: string;
+    ariaLabel?: string;
+    resizeLabel?: string;
+    tiled?: boolean;
+    layoutAnimating?: boolean;
+    tileResizing?: boolean;
+    tilePaneId?: number | null;
+    onClose?: (id: number) => void;
+    onYellow?: (id: number) => void;
+    onGreen?: (id: number) => void;
+    onFocus?: (id: number) => void;
+    onStartMove?: (id: number, event: PointerEvent) => void;
+    onStartTiledMove?: (id: number, event: PointerEvent) => void;
+    onMoveTiledMove?: (event: PointerEvent) => void;
+    onFinishTiledMove?: () => void;
+    onStartResize?: (id: number, event: PointerEvent, width: number, height: number) => void;
+    onTitlebarDoubleClick?: (id: number) => void;
+  };
+
+  let {
+    id,
+    title,
+    x,
+    y,
+    width,
+    height,
+    zIndex = 1,
+    focused = false,
+    background = "#111111",
+    ariaLabel = title,
+    resizeLabel = `Resize ${title}`,
+    tiled = false,
+    layoutAnimating = false,
+    tileResizing = false,
+    tilePaneId = null,
+    onClose = () => {},
+    onYellow = () => {},
+    onGreen = () => {},
+    onFocus = () => {},
+    onStartMove = () => {},
+    onStartTiledMove = () => {},
+    onMoveTiledMove = () => {},
+    onFinishTiledMove = () => {},
+    onStartResize = () => {},
+    onTitlebarDoubleClick = () => {},
+  }: Props = $props();
 
   let frameEl: HTMLDivElement;
   let tiledHandleEl: HTMLButtonElement;
-  let tiledHandleStart: { x: number; y: number } | null = null;
-  let tiledHandleDragged = false;
+  let tiledDragTarget: HTMLElement | null = null;
+  let tiledDecorationsOpen = $state(false);
+  let tiledHandleStart = $state<{ x: number; y: number } | null>(null);
+  let tiledHandleDragged = $state(false);
+
+  // Decorations are explicitly opened from this pane's ellipsis, not derived
+  // from whichever tiled pane happens to own workspace focus.
+  $effect(() => {
+    if (!tiled || !focused) tiledDecorationsOpen = false;
+  });
 
   function startTiledHandle(event: PointerEvent) {
     if (event.button !== 0) return;
@@ -42,7 +80,8 @@
     onFocus(id);
     tiledHandleStart = { x: event.clientX, y: event.clientY };
     tiledHandleDragged = false;
-    tiledHandleEl?.setPointerCapture(event.pointerId);
+    tiledDragTarget = event.currentTarget as HTMLElement;
+    tiledDragTarget.setPointerCapture(event.pointerId);
     onStartTiledMove(id, event);
   }
 
@@ -56,20 +95,38 @@
 
   function finishTiledHandle(event: PointerEvent) {
     if (!tiledHandleStart) return;
-    tiledHandleEl?.releasePointerCapture(event.pointerId);
+    tiledDragTarget?.releasePointerCapture(event.pointerId);
+    if (!tiledHandleDragged) tiledDecorationsOpen = true;
     onFinishTiledMove();
+    tiledDragTarget = null;
     tiledHandleStart = null;
   }
 
+  // Tiled titlebar events stay inside the pane because they own reordering.
+  // Floating titlebar moves must bubble to the workspace's drag loop.
+  function moveTitlebar(event: PointerEvent) {
+    if (!tiled) return;
+    event.stopPropagation();
+    moveTiledHandle(event);
+  }
+
+  function finishTitlebar(event: PointerEvent) {
+    if (!tiled) return;
+    event.stopPropagation();
+    finishTiledHandle(event);
+  }
+
   let contentEl: HTMLDivElement;
-  let beforeRect: DOMRect | null = null;
+  let beforeRect = $state<DOMRect | null>(null);
   let flipAnimation: { stop: () => void } | undefined;
 
   // The dragged frame follows the cursor directly. All other tiled frames use
   // Motion's FLIP transform so they glide into the slots they are reordered to.
-  $: isDraggedTile = tiled && zIndex >= 1000;
+  const isDraggedTile = $derived(tiled && zIndex >= 1000);
 
-  beforeUpdate(() => {
+  // `$effect.pre` preserves the previous layout box before Svelte applies DOM
+  // updates; `$effect` below then performs the corresponding FLIP animation.
+  $effect.pre(() => {
     if (tiled && !layoutAnimating && !tileResizing && !isDraggedTile && frameEl) {
       beforeRect = frameEl.getBoundingClientRect();
     } else {
@@ -77,7 +134,7 @@
     }
   });
 
-  afterUpdate(() => {
+  $effect(() => {
     // Mode changes already animate the outer coordinate transform. Clearing the
     // FLIP baseline here prevents an extra scale animation when that transition
     // finishes and `layoutAnimating` becomes false.
@@ -125,14 +182,15 @@
     class:interacting={focused}
     style="background: {background};"
   >
-  {#if tiled && !focused}
+  {#if tiled && !tiledDecorationsOpen}
     <div class="tiled-window-controls">
       <button
         bind:this={tiledHandleEl}
         class="tiled-drag-handle"
         class:dragging={tiledHandleStart !== null}
         type="button"
-        aria-label={`Move or focus ${title}`}
+        aria-label={`Move or show controls for ${title}`}
+        aria-expanded={tiledDecorationsOpen}
         title="Drag to rearrange; click to show window controls"
         style="touch-action: none;"
         on:pointerdown|stopPropagation={startTiledHandle}
@@ -142,14 +200,19 @@
       ><span></span><span></span><span></span></button>
     </div>
   {:else}
-    <!-- The focused tiled window restores the regular window titlebar. -->
+    <!-- Floating windows and explicitly opened tiled decorations share this titlebar. -->
     <div
-      class="flex cursor-move select-none items-center overflow-hidden"
+      class="window-titlebar rounded-t-xl flex cursor-move select-none items-center overflow-hidden"
+      class:tiled-titlebar-overlay={tiled}
+      class:floating-titlebar={!tiled}
       style="touch-action: none;"
       role="toolbar"
       tabindex="-1"
       aria-label="{title} window controls"
-      on:pointerdown|stopPropagation={(event) => !tiled && onStartMove(id, event)}
+      on:pointerdown|stopPropagation={(event) => tiled ? startTiledHandle(event) : onStartMove(id, event)}
+      on:pointermove={moveTitlebar}
+      on:pointerup={finishTitlebar}
+      on:pointercancel={finishTitlebar}
       on:dblclick|stopPropagation={() => !tiled && onTitlebarDoubleClick(id)}
     >
       <div class="flex flex-1 items-center px-3">
@@ -199,6 +262,20 @@
   .interacting { transition-property: opacity, box-shadow; }
   .mode-animating {
     transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1);
+  }
+
+  /* Keep floating titlebars composited while their coordinate transform updates
+     every pointer frame; the tiled overlay deliberately remains in its pane. */
+  .floating-titlebar { will-change: transform; }
+
+  .tiled-titlebar-overlay {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    left: 0;
+    box-shadow: 0 8px 18px rgb(0 0 0 / 0.25), inset 0 -1px rgb(255 255 255 / 0.06);
+    backdrop-filter: blur(12px);
   }
 
   .tiled-window-controls {
