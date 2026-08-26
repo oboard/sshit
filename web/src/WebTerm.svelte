@@ -238,6 +238,7 @@
       terminalResizeObserver = new ResizeObserver(scheduleTerminalFit);
       terminalResizeObserver.observe(termEl);
       terminalReady = true;
+      onTitleChange(shell.id, currentTitle);
       terminal.onTitleChange((title) => {
         onTitleChange(shell.id, title || fallbackTitle);
       });

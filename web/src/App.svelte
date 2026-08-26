@@ -333,20 +333,24 @@
         topZ = Math.max(topZ, incoming.zIndex || 1);
         const local = localById.get(incoming.id);
         if (!local) return incoming;
+        const merged = {
+          ...incoming,
+          title: local.title ?? incoming.title,
+        };
         // Preserve in-flight local geometry while dragging/resizing.
         if (incoming.id === movingWindowID) {
-          return { ...incoming, x: local.x, y: local.y };
+          return { ...merged, x: local.x, y: local.y };
         }
         if (incoming.id === resizingWindowID) {
           return {
-            ...incoming,
+            ...merged,
             width: local.width,
             height: local.height,
             cols: local.cols,
             rows: local.rows,
           };
         }
-        return incoming;
+        return merged;
       });
 
       const nextOutputs = { ...outputs };
