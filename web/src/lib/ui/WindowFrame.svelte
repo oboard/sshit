@@ -33,7 +33,6 @@
 
   let frameEl: HTMLDivElement;
   let tiledHandleEl: HTMLButtonElement;
-  let tiledDecorationsOpen = false;
   let tiledHandleStart: { x: number; y: number } | null = null;
   let tiledHandleDragged = false;
 
@@ -58,7 +57,6 @@
   function finishTiledHandle(event: PointerEvent) {
     if (!tiledHandleStart) return;
     tiledHandleEl?.releasePointerCapture(event.pointerId);
-    if (!tiledHandleDragged) tiledDecorationsOpen = !tiledDecorationsOpen;
     onFinishTiledMove();
     tiledHandleStart = null;
   }
@@ -127,44 +125,32 @@
     class:interacting={focused}
     style="background: {background};"
   >
-  {#if tiled}
-    <div class="tiled-window-controls" class:open={tiledDecorationsOpen}>
+  {#if tiled && !focused}
+    <div class="tiled-window-controls">
       <button
         bind:this={tiledHandleEl}
         class="tiled-drag-handle"
         class:dragging={tiledHandleStart !== null}
         type="button"
-        aria-label={`Move or show controls for ${title}`}
-        aria-expanded={tiledDecorationsOpen}
-        title="Drag to rearrange; click for window controls"
+        aria-label={`Move or focus ${title}`}
+        title="Drag to rearrange; click to show window controls"
         style="touch-action: none;"
         on:pointerdown|stopPropagation={startTiledHandle}
         on:pointermove|stopPropagation={moveTiledHandle}
         on:pointerup|stopPropagation={finishTiledHandle}
         on:pointercancel|stopPropagation={finishTiledHandle}
       ><span></span><span></span><span></span></button>
-
-      {#if tiledDecorationsOpen}
-        <div class="tiled-decoration-popover" role="toolbar" aria-label={`${title} window controls`}>
-          <CircleButtons>
-            <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && onClose(id)} />
-            <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && onYellow(id)} />
-            <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && onGreen(id)} />
-          </CircleButtons>
-          <span class="tiled-decoration-title">{title}</span>
-        </div>
-      {/if}
     </div>
   {:else}
-    <!-- touch-action: none keeps the browser from stealing window drags. -->
+    <!-- The focused tiled window restores the regular window titlebar. -->
     <div
       class="flex cursor-move select-none items-center overflow-hidden"
       style="touch-action: none;"
       role="toolbar"
       tabindex="-1"
       aria-label="{title} window controls"
-      on:pointerdown|stopPropagation={(event) => onStartMove(id, event)}
-      on:dblclick|stopPropagation={() => onTitlebarDoubleClick(id)}
+      on:pointerdown|stopPropagation={(event) => !tiled && onStartMove(id, event)}
+      on:dblclick|stopPropagation={() => !tiled && onTitlebarDoubleClick(id)}
     >
       <div class="flex flex-1 items-center px-3">
         <CircleButtons>
@@ -246,30 +232,6 @@
     border-radius: 9999px;
     background: rgb(228 228 231 / 0.9);
     box-shadow: 0 1px rgb(0 0 0 / 0.25);
-  }
-
-  .tiled-decoration-popover {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    min-width: max-content;
-    margin-top: 7px;
-    padding: 8px 10px;
-    border: 1px solid rgb(255 255 255 / 0.14);
-    border-radius: 12px;
-    background: rgb(24 24 27 / 0.96);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 0.4), inset 0 1px rgb(255 255 255 / 0.06);
-    backdrop-filter: blur(12px);
-  }
-
-  .tiled-decoration-title {
-    max-width: 180px;
-    overflow: hidden;
-    color: rgb(212 212 216);
-    font-size: 12px;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   @media (pointer: coarse) {
