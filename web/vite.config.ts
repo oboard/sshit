@@ -28,5 +28,8 @@ export default defineConfig({
   build: {
     outDir: "../internal/web/dist",
     emptyOutDir: true,
+    // MarkdownEditor is deliberately lazy-loaded and its 505 kB minified chunk
+    // is expected because it bundles CodeMirror's editing extensions.
+    chunkSizeWarningLimit: 550,
   },
 });

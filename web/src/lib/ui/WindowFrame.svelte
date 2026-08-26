@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, type Snippet } from "svelte";
   import { animate } from "motion";
 
   import CircleButton from "$lib/ui/CircleButton.svelte";
@@ -31,6 +31,7 @@
     onFinishTiledMove?: () => void;
     onStartResize?: (id: number, event: PointerEvent, width: number, height: number) => void;
     onTitlebarDoubleClick?: (id: number) => void;
+    children: Snippet;
   };
 
   let {
@@ -59,10 +60,10 @@
     onFinishTiledMove = () => {},
     onStartResize = () => {},
     onTitlebarDoubleClick = () => {},
+    children,
   }: Props = $props();
 
   let frameEl: HTMLDivElement;
-  let tiledHandleEl: HTMLButtonElement;
   let tiledDragTarget: HTMLElement | null = null;
   let tiledDecorationsOpen = $state(false);
   let tiledHandleStart = $state<{ x: number; y: number } | null>(null);
@@ -110,10 +111,33 @@
     moveTiledHandle(event);
   }
 
+  function stopPropagation(handler: (event: PointerEvent) => void) {
+    return (event: PointerEvent) => {
+      event.stopPropagation();
+      handler(event);
+    };
+  }
+
+  function stopPointerDown(event: PointerEvent) {
+    event.stopPropagation();
+    onFocus(id);
+  }
+
+  function startTitlebarInteraction(event: PointerEvent) {
+    event.stopPropagation();
+    if (tiled) startTiledHandle(event);
+    else onStartMove(id, event);
+  }
+
   function finishTitlebar(event: PointerEvent) {
     if (!tiled) return;
     event.stopPropagation();
     finishTiledHandle(event);
+  }
+
+  function resize(event: PointerEvent) {
+    event.stopPropagation();
+    onStartResize(id, event, width, height);
   }
 
   let contentEl: HTMLDivElement;
@@ -172,8 +196,8 @@
   data-tile-pane={tilePaneId ?? undefined}
   role="group"
   aria-label={ariaLabel}
-  on:pointerdown|stopPropagation={() => onFocus(id)}
-  on:wheel|stopPropagation
+  onpointerdown={stopPointerDown}
+  onwheel={(event) => event.stopPropagation()}
 >
   <div
     bind:this={contentEl}
@@ -185,7 +209,6 @@
   {#if tiled && !tiledDecorationsOpen}
     <div class="tiled-window-controls">
       <button
-        bind:this={tiledHandleEl}
         class="tiled-drag-handle"
         class:dragging={tiledHandleStart !== null}
         type="button"
@@ -193,10 +216,10 @@
         aria-expanded={tiledDecorationsOpen}
         title="Drag to rearrange; click to show window controls"
         style="touch-action: none;"
-        on:pointerdown|stopPropagation={startTiledHandle}
-        on:pointermove|stopPropagation={moveTiledHandle}
-        on:pointerup|stopPropagation={finishTiledHandle}
-        on:pointercancel|stopPropagation={finishTiledHandle}
+        onpointerdown={stopPropagation(startTiledHandle)}
+        onpointermove={stopPropagation(moveTiledHandle)}
+        onpointerup={stopPropagation(finishTiledHandle)}
+        onpointercancel={stopPropagation(finishTiledHandle)}
       ><span></span><span></span><span></span></button>
     </div>
   {:else}
@@ -209,11 +232,14 @@
       role="toolbar"
       tabindex="-1"
       aria-label="{title} window controls"
-      on:pointerdown|stopPropagation={(event) => tiled ? startTiledHandle(event) : onStartMove(id, event)}
-      on:pointermove={moveTitlebar}
-      on:pointerup={finishTitlebar}
-      on:pointercancel={finishTitlebar}
-      on:dblclick|stopPropagation={() => !tiled && onTitlebarDoubleClick(id)}
+      onpointerdown={startTitlebarInteraction}
+      onpointermove={moveTitlebar}
+      onpointerup={finishTitlebar}
+      onpointercancel={finishTitlebar}
+      ondblclick={(event) => {
+        event.stopPropagation();
+        if (!tiled) onTitlebarDoubleClick(id);
+      }}
     >
       <div class="flex flex-1 items-center px-3">
         <CircleButtons>
@@ -229,7 +255,7 @@
     </div>
   {/if}
 
-  <slot />
+  {@render children()}
 
   {#if !tiled}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -239,7 +265,7 @@
       role="separator"
       aria-label={resizeLabel}
       title={resizeLabel}
-      on:pointerdown|stopPropagation={(event) => onStartResize(id, event, width, height)}
+      onpointerdown={resize}
     ></div>
   {/if}
   </div>

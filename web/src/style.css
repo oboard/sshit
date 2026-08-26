@@ -114,3 +114,7 @@
 .terminal-shell .xterm {
   height: 100%;
 }
+
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}
