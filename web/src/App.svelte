@@ -1984,17 +1984,19 @@
         {/each}
       {/if}
 
-      {#each otherUsersForUI as [id, user] (id)}
-        {#if user.cursor}
-          <div
-            class="pointer-events-none absolute z-[9999]"
-            style="transform: translate({user.cursor[0]}px, {user
-              .cursor[1]}px);"
-          >
-            <LiveCursor {user} />
-          </div>
-        {/if}
-      {/each}
+      {#if workspaceMode === "floating"}
+        {#each otherUsersForUI as [id, user] (id)}
+          {#if user.cursor}
+            <div
+              class="pointer-events-none absolute z-[9999]"
+              style="transform: translate({user.cursor[0]}px, {user
+                .cursor[1]}px);"
+            >
+              <LiveCursor {user} />
+            </div>
+          {/if}
+        {/each}
+      {/if}
 
       <svg
         class="pointer-events-none absolute left-0 top-0 z-[9998] h-px w-px overflow-visible"
