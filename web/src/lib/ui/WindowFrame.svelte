@@ -25,10 +25,44 @@
   export let onGreen: (id: number) => void = () => {};
   export let onFocus: (id: number) => void = () => {};
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onStartTiledMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onMoveTiledMove: (event: PointerEvent) => void = () => {};
+  export let onFinishTiledMove: () => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
   export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
   let frameEl: HTMLDivElement;
+  let tiledHandleEl: HTMLButtonElement;
+  let tiledDecorationsOpen = false;
+  let tiledHandleStart: { x: number; y: number } | null = null;
+  let tiledHandleDragged = false;
+
+  function startTiledHandle(event: PointerEvent) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    onFocus(id);
+    tiledHandleStart = { x: event.clientX, y: event.clientY };
+    tiledHandleDragged = false;
+    tiledHandleEl?.setPointerCapture(event.pointerId);
+    onStartTiledMove(id, event);
+  }
+
+  function moveTiledHandle(event: PointerEvent) {
+    if (!tiledHandleStart) return;
+    if (Math.hypot(event.clientX - tiledHandleStart.x, event.clientY - tiledHandleStart.y) > 8) {
+      tiledHandleDragged = true;
+    }
+    onMoveTiledMove(event);
+  }
+
+  function finishTiledHandle(event: PointerEvent) {
+    if (!tiledHandleStart) return;
+    tiledHandleEl?.releasePointerCapture(event.pointerId);
+    if (!tiledHandleDragged) tiledDecorationsOpen = !tiledDecorationsOpen;
+    onFinishTiledMove();
+    tiledHandleStart = null;
+  }
+
   let contentEl: HTMLDivElement;
   let beforeRect: DOMRect | null = null;
   let flipAnimation: { stop: () => void } | undefined;
@@ -93,7 +127,35 @@
     class:interacting={focused}
     style="background: {background};"
   >
-  {#if !tiled}
+  {#if tiled}
+    <div class="tiled-window-controls" class:open={tiledDecorationsOpen}>
+      <button
+        bind:this={tiledHandleEl}
+        class="tiled-drag-handle"
+        class:dragging={tiledHandleStart !== null}
+        type="button"
+        aria-label={`Move or show controls for ${title}`}
+        aria-expanded={tiledDecorationsOpen}
+        title="Drag to rearrange; click for window controls"
+        style="touch-action: none;"
+        on:pointerdown|stopPropagation={startTiledHandle}
+        on:pointermove|stopPropagation={moveTiledHandle}
+        on:pointerup|stopPropagation={finishTiledHandle}
+        on:pointercancel|stopPropagation={finishTiledHandle}
+      ><span></span><span></span><span></span></button>
+
+      {#if tiledDecorationsOpen}
+        <div class="tiled-decoration-popover" role="toolbar" aria-label={`${title} window controls`}>
+          <CircleButtons>
+            <CircleButton kind="red" on:pointerdown={(event) => event.button === 0 && onClose(id)} />
+            <CircleButton kind="yellow" on:pointerdown={(event) => event.button === 0 && onYellow(id)} />
+            <CircleButton kind="green" on:pointerdown={(event) => event.button === 0 && onGreen(id)} />
+          </CircleButtons>
+          <span class="tiled-decoration-title">{title}</span>
+        </div>
+      {/if}
+    </div>
+  {:else}
     <!-- touch-action: none keeps the browser from stealing window drags. -->
     <div
       class="flex cursor-move select-none items-center overflow-hidden"
@@ -151,6 +213,70 @@
   .interacting { transition-property: opacity, box-shadow; }
   .mode-animating {
     transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1);
+  }
+
+  .tiled-window-controls {
+    position: absolute;
+    z-index: 20;
+    left: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translateX(-50%);
+  }
+
+  .tiled-drag-handle {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 26px;
+    padding: 0;
+    cursor: grab;
+  }
+
+  .tiled-drag-handle:active,
+  .tiled-drag-handle.dragging { cursor: grabbing; }
+  .tiled-drag-handle:focus-visible { outline: 2px solid rgb(103 232 249 / 0.9); outline-offset: 2px; }
+
+  .tiled-drag-handle span {
+    width: 3px;
+    height: 3px;
+    border-radius: 9999px;
+    background: rgb(228 228 231 / 0.9);
+    box-shadow: 0 1px rgb(0 0 0 / 0.25);
+  }
+
+  .tiled-decoration-popover {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    min-width: max-content;
+    margin-top: 7px;
+    padding: 8px 10px;
+    border: 1px solid rgb(255 255 255 / 0.14);
+    border-radius: 12px;
+    background: rgb(24 24 27 / 0.96);
+    box-shadow: 0 12px 30px rgb(0 0 0 / 0.4), inset 0 1px rgb(255 255 255 / 0.06);
+    backdrop-filter: blur(12px);
+  }
+
+  .tiled-decoration-title {
+    max-width: 180px;
+    overflow: hidden;
+    color: rgb(212 212 216);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (pointer: coarse) {
+    .tiled-drag-handle {
+      width: 50px;
+      height: 32px;
+    }
   }
 
   .resize-handle {

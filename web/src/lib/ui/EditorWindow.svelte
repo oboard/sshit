@@ -19,6 +19,9 @@
   export let onClose: (id: number) => void = () => {};
   export let onFocus: (id: number) => void = () => {};
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onStartTiledMove: (id: number, event: PointerEvent) => void = () => {};
+  export let onMoveTiledMove: (event: PointerEvent) => void = () => {};
+  export let onFinishTiledMove: () => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
   export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
@@ -46,7 +49,10 @@
   onGreen={(id) => onFocus(id)}
   onFocus={(id) => onFocus(id)}
   onTitlebarDoubleClick={(id) => onTitlebarDoubleClick(id)}
-  onStartMove={(id, _event) => onStartMove(id, _event)}
+  onStartMove={(id, event) => onStartMove(id, event)}
+  onStartTiledMove={(id, event) => onStartTiledMove(id, event)}
+  {onMoveTiledMove}
+  {onFinishTiledMove}
   onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
   <div class="overflow-hidden" style="width: {windowState.width}px; height: {windowState.height}px;">

@@ -1168,6 +1168,11 @@
     movingOrigin = [win.x, win.y];
   }
 
+  function startTiledHandleMove(id: number, event: PointerEvent) {
+    if (workspaceMode !== "tiled" || tiledReorderDrag) return;
+    beginTiledReorder(id, event);
+  }
+
   function beginTiledReorder(id: number, event: PointerEvent) {
     const pane = displayWindows.find((windowState) => windowState.id === id);
     if (!pane) return;
@@ -1886,6 +1891,9 @@
               if (focusedWindowID === windowState.id) focusedWindowID = -1;
             }}
             onStartMove={(id, event) => startMove(id, event)}
+            onStartTiledMove={(id, event) => startTiledHandleMove(id, event)}
+            onMoveTiledMove={moveTiledReorder}
+            onFinishTiledMove={finishTiledReorder}
             onStartResize={(id, event, width, height) =>
               startResize(id, event, width, height)}
             onTiledResize={reportTiledPtyResize}
@@ -1912,6 +1920,9 @@
             tilePaneId={workspaceMode === "tiled" ? windowState.id : null}
             onFocus={(id) => focusWindow(id)}
             onStartMove={(id, event) => startMove(id, event)}
+            onStartTiledMove={(id, event) => startTiledHandleMove(id, event)}
+            onMoveTiledMove={moveTiledReorder}
+            onFinishTiledMove={finishTiledReorder}
             onStartResize={(id, event, width, height) =>
               startResize(id, event, width, height)}
             onClose={(id) => closeWindow(id)}
