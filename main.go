@@ -977,6 +977,7 @@ func (h *webHub) refreshAgents() {
 	}
 	h.mu.Unlock()
 
+	stateChanged := false
 	for _, pb := range probes {
 		// Shell out outside the hub lock.
 		ref, agentCwd := persist.DetectAgentForPID(pb.pid)
@@ -993,6 +994,7 @@ func (h *webHub) refreshAgents() {
 					win.cwd = agentCwd
 					win.windowState.Cwd = agentCwd
 					h.dirty = true
+					stateChanged = true
 				}
 			} else {
 				win.agentKind, win.agentSession = "", ""
@@ -1000,10 +1002,14 @@ func (h *webHub) refreshAgents() {
 					win.cwd = shellCwd
 					win.windowState.Cwd = shellCwd
 					h.dirty = true
+					stateChanged = true
 				}
 			}
 		}
 		h.mu.Unlock()
+	}
+	if stateChanged {
+		h.broadcastState()
 	}
 }
 
