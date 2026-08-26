@@ -6,7 +6,7 @@
   onMount(async () => {
     MarkdownEditor = (await import("$lib/ui/MarkdownEditor.svelte")).default;
   });
-  import WorkspaceWindow from "$lib/ui/WorkspaceWindow.svelte";
+  import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import type { WindowState } from "$lib/protocol";
 
   export let windowState: WindowState;
@@ -25,7 +25,7 @@
   $: title = windowState.title || "Markdown Editor";
 </script>
 
-<WorkspaceWindow
+<WindowFrame
   id={windowState.id}
   {title}
   x={windowState.x}
@@ -56,4 +56,4 @@
       <div class="grid h-full place-items-center text-sm text-zinc-400">Loading editor…</div>
     {/if}
   </div>
-</WorkspaceWindow>
+</WindowFrame>

@@ -160,7 +160,7 @@
 
   .resize-handle::after {
     content: "";
-    @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 border-zinc-500;
+    @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 rounded-br-xl border-zinc-500;
     pointer-events: none;
   }
 

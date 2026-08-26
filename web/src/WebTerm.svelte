@@ -3,7 +3,7 @@
   import type { FitAddon } from "@xterm/addon-fit";
   import type { Terminal } from "@xterm/xterm";
 
-  import WorkspaceWindow from "$lib/ui/WorkspaceWindow.svelte";
+  import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import { settings } from "$lib/settings";
   import themes from "$lib/ui/themes";
   import type { WindowState } from "$lib/protocol";
@@ -307,7 +307,7 @@
   });
 </script>
 
-<WorkspaceWindow
+<WindowFrame
   id={shell.id}
   title={currentTitle}
   x={shell.x}
@@ -332,7 +332,7 @@
   onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
   <div
-    class="overflow-hidden px-4 py-2"
+    class="overflow-hidden px-2"
     class:p-0={tiled}
     bind:this={termEl}
     style="width: {shell.width || 760}px; height: {shell.height || 420}px;"
@@ -344,4 +344,4 @@
       </div>
     {/if}
   </div>
-</WorkspaceWindow>
+</WindowFrame>
