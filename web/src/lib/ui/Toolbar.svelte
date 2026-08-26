@@ -2,7 +2,7 @@
   import {
     FileTextIcon,
     GridIcon,
-    LayersIcon,
+    LayoutIcon,
     PenToolIcon,
     PlusCircleIcon,
     SettingsIcon,
@@ -77,7 +77,7 @@
         {#if workspaceMode === "tiled"}
           <GridIcon strokeWidth={1.5} class="p-0.5" />
         {:else}
-          <LayersIcon strokeWidth={1.5} class="p-0.5" />
+          <LayoutIcon strokeWidth={1.5} class="p-0.5" />
         {/if}
       </button>
       <button

@@ -6,7 +6,7 @@
   onMount(async () => {
     MarkdownEditor = (await import("$lib/ui/MarkdownEditor.svelte")).default;
   });
-  import WindowFrame from "$lib/ui/WindowFrame.svelte";
+  import WorkspaceWindow from "$lib/ui/WorkspaceWindow.svelte";
   import type { WindowState } from "$lib/protocol";
 
   export let windowState: WindowState;
@@ -20,11 +20,12 @@
   export let onFocus: (id: number) => void = () => {};
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
+  export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
-  const title = "Markdown Editor";
+  $: title = windowState.title || "Markdown Editor";
 </script>
 
-<WindowFrame
+<WorkspaceWindow
   id={windowState.id}
   {title}
   x={windowState.x}
@@ -44,6 +45,7 @@
   onYellow={(id) => onFocus(id)}
   onGreen={(id) => onFocus(id)}
   onFocus={(id) => onFocus(id)}
+  onTitlebarDoubleClick={(id) => onTitlebarDoubleClick(id)}
   onStartMove={(id, _event) => onStartMove(id, _event)}
   onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
@@ -54,4 +56,4 @@
       <div class="grid h-full place-items-center text-sm text-zinc-400">Loading editor…</div>
     {/if}
   </div>
-</WindowFrame>
+</WorkspaceWindow>

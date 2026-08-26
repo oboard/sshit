@@ -84,7 +84,6 @@
   let showNetworkInfo = false;
   let focusedWindowID = -1;
   let workspaceMode: "floating" | "tiled" = "floating";
-  let shellTitles: Record<number, string> = {};
   let tiledViewport = { width: 0, height: 0 };
   type TileSplit = {
     id: string;
@@ -200,6 +199,11 @@
   const binDecoder = new TextDecoder();
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 2.5;
+  const SINGLE_WINDOW_TOP_INSET = 56;
+  const SINGLE_WINDOW_EXTRA_MARGIN = 24;
+  const SINGLE_WINDOW_FRAME_PADDING = 40;
+  const SINGLE_WINDOW_FOCUS_ZOOM_SCALE = 0.96;
+  const SINGLE_WINDOW_HEIGHT_TRIM = 12;
   const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
   let movingWindowID = -1;
@@ -210,7 +214,7 @@
   let resizingOrigin = [0, 0];
 
   $: shellWindows = windows.filter((w) => w.kind === "shell");
-  $: if (workspaceMode === "tiled") {
+  $: if (workspaceMode === "tiled" && activeTileSplit === null) {
     const pending = pendingSharedTileLayout;
     const currentWindowIds = new Set(
       windows.map((windowState) => windowState.id),
@@ -274,12 +278,9 @@
 
   $: otherUsersForUI = usersForUI.filter(([id]) => id !== clientID);
 
-  $: focusedWindow = focusedWindowID >= 0 ? windowById(focusedWindowID) : undefined;
-  $: toolbarTitle = focusedWindow
-    ? focusedWindow.kind === "shell"
-      ? shellTitles[focusedWindow.id] ?? "sshit shell"
-      : "Markdown Editor"
-    : "sshit";
+  $: focusedWindow =
+    focusedWindowID >= 0 ? windowById(focusedWindowID) : undefined;
+  $: toolbarTitle = focusedWindow?.title ?? "sshit";
 
   function windowById(id: number) {
     return windows.find((w) => w.id === id);
@@ -287,10 +288,9 @@
 
   function handleShellTitleChange(id: number, title: string) {
     if (!title?.trim()) return;
-    shellTitles = {
-      ...shellTitles,
-      [id]: title,
-    };
+    windows = windows.map((windowState) =>
+      windowState.id === id ? { ...windowState, title } : windowState,
+    );
   }
 
   function isShell(id: number) {
@@ -368,16 +368,7 @@
         workspaceMode === "floating"
       ) {
         const target = windows.find((w) => w.kind === "shell") ?? windows[0];
-        const fitZoom = fitZoomFor(target.width || 760);
-        requestAnimationFrame(() =>
-          moveCanvasTo(
-            target.x,
-            target.y,
-            fitZoom,
-            target.width || 760,
-            target.height || 420,
-          ),
-        );
+        focusAndCenterWindow(target.id);
       }
     }
   }
@@ -559,21 +550,42 @@
    * Zoom level that fits a window of the given world width on small screens.
    * On desktop viewports this always returns 1.
    */
-  function fitZoomFor(width: number) {
+  function fitZoomFor(
+    width: number,
+    height = 420,
+    topInset = SINGLE_WINDOW_TOP_INSET,
+  ) {
     if (!fabricEl) return 1;
     const rect = fabricEl.getBoundingClientRect();
-    return Math.min(1, (rect.width - 24) / (width + 40));
+    const availableWidth = Math.max(240, rect.width - SINGLE_WINDOW_EXTRA_MARGIN);
+    const availableHeight = Math.max(
+      220,
+      rect.height - topInset - SINGLE_WINDOW_EXTRA_MARGIN,
+    );
+    return Math.min(
+      1,
+      availableWidth / (width + SINGLE_WINDOW_FRAME_PADDING),
+      availableHeight / (height + SINGLE_WINDOW_FRAME_PADDING),
+    );
   }
 
-  function moveCanvasTo(x: number, y: number, nextZoom = 1, w = 760, h = 420) {
+  function moveCanvasTo(
+    x: number,
+    y: number,
+    nextZoom = 1,
+    w = 760,
+    h = 420,
+    topInset = SINGLE_WINDOW_TOP_INSET,
+  ) {
     if (!fabricEl) return;
     const rect = fabricEl.getBoundingClientRect();
     const startX = viewportX;
     const startY = viewportY;
     const startZoom = zoom;
     const targetZoom = nextZoom;
+    const visibleCenterY = topInset + Math.max(0, rect.height - topInset) / 2;
     const targetX = Math.round(rect.width / 2 - (x + w / 2) * targetZoom);
-    const targetY = Math.round(rect.height / 2 - (y + h / 2) * targetZoom);
+    const targetY = Math.round(visibleCenterY - (y + h / 2) * targetZoom);
     animateViewTo(targetX, targetY, targetZoom, startX, startY, startZoom, 350);
   }
 
@@ -683,10 +695,11 @@
     windows = windows.map((windowState) =>
       windowState.id === id ? { ...windowState, cols, rows } : windowState,
     );
-    // Never broadcast a PTY resize while Ctrl-dragging: the user may pause over
-    // a pane, and any server state broadcast would disrupt that active gesture.
+    // Never broadcast a PTY resize while a local tiled gesture is active: the
+    // user may pause while dragging a pane or splitter, and a state broadcast
+    // would overwrite that in-flight local layout.
     pendingTiledPtySizes = { ...pendingTiledPtySizes, [id]: { cols, rows } };
-    if (!tiledReorderDrag) {
+    if (!tiledReorderDrag && !activeTileSplit) {
       window.clearTimeout(tiledPtyFlushTimer);
       tiledPtyFlushTimer = window.setTimeout(flushTiledPtySizes, 180);
     }
@@ -817,12 +830,28 @@
       }
       if (node.axis === "vertical") {
         const firstWidth = Math.round(width * node.ratio);
-        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x: x + firstWidth, y, width, height });
+        splits.push({
+          id: node.id,
+          axis: node.axis,
+          ratio: node.ratio,
+          x: x + firstWidth,
+          y,
+          width,
+          height,
+        });
         visit(node.first, x, y, firstWidth, height);
         visit(node.second, x + firstWidth, y, width - firstWidth, height);
       } else {
         const firstHeight = Math.round(height * node.ratio);
-        splits.push({ id: node.id, axis: node.axis, ratio: node.ratio, x, y: y + firstHeight, width, height });
+        splits.push({
+          id: node.id,
+          axis: node.axis,
+          ratio: node.ratio,
+          x,
+          y: y + firstHeight,
+          width,
+          height,
+        });
         visit(node.first, x, y, width, firstHeight);
         visit(node.second, x, y + firstHeight, width, height - firstHeight);
       }
@@ -839,7 +868,11 @@
     return result;
   }
 
-  function updateTileRatio(node: TileNode | null, id: string, ratio: number): TileNode | null {
+  function updateTileRatio(
+    node: TileNode | null,
+    id: string,
+    ratio: number,
+  ): TileNode | null {
     if (!node || "windowId" in node) return node;
     if (node.id === id) return { ...node, ratio };
     return {
@@ -853,34 +886,53 @@
     if (workspaceMode !== "tiled" || tiledReorderDrag) return;
     event.preventDefault();
     event.stopPropagation();
+    // Any pending snapshot predates this local resize and must not be applied
+    // when the drag ends.
+    pendingSharedTileLayout = null;
     activeTileSplit = id;
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   }
 
   function moveTileSplit(event: PointerEvent) {
     if (!activeTileSplit || !fabricEl) return;
-    const split = tileSplits.find((candidate) => candidate.id === activeTileSplit);
+    const split = tileSplits.find(
+      (candidate) => candidate.id === activeTileSplit,
+    );
     if (!split) return;
     event.preventDefault();
     const rect = fabricEl.getBoundingClientRect();
-    const pointer = (split.axis === "vertical"
-      ? event.clientX - rect.left - viewportX
-      : event.clientY - rect.top - viewportY) / zoom;
-    const origin = split.axis === "vertical" ? split.x - split.ratio * split.width : split.y - split.ratio * split.height;
-    const ratio = (pointer - origin) / Math.max(1, split.axis === "vertical" ? split.width : split.height);
-    tileTree = updateTileRatio(tileTree, activeTileSplit, Math.max(0.12, Math.min(0.88, ratio)));
+    const pointer =
+      (split.axis === "vertical"
+        ? event.clientX - rect.left - viewportX
+        : event.clientY - rect.top - viewportY) / zoom;
+    const origin =
+      split.axis === "vertical"
+        ? split.x - split.ratio * split.width
+        : split.y - split.ratio * split.height;
+    const ratio =
+      (pointer - origin) /
+      Math.max(1, split.axis === "vertical" ? split.width : split.height);
+    tileTree = updateTileRatio(
+      tileTree,
+      activeTileSplit,
+      Math.max(0.12, Math.min(0.88, ratio)),
+    );
   }
 
   function stopTileSplit() {
     if (!activeTileSplit) return;
-    activeTileSplit = null;
+    // Commit the ratio while the local-drag guard is still active. This prevents
+    // an older server state (for example a terminal resize) from replacing it.
     persistTiledLayout();
+    flushTiledPtySizes();
+    activeTileSplit = null;
     void applyTiledLayout();
   }
 
   function refitFloatingTerminals() {
     for (const windowState of windows) {
-      if (windowState.kind === "shell") termRefs[windowState.id]?.fitAndReportSize();
+      if (windowState.kind === "shell")
+        termRefs[windowState.id]?.fitAndReportSize();
     }
   }
 
@@ -919,7 +971,8 @@
       layoutAnimating = false;
       // Once the tiled-to-floating geometry transition has reached its real
       // content boxes, recalculate terminal grids and resize their PTYs.
-      if (nextMode === "floating") requestAnimationFrame(refitFloatingTerminals);
+      if (nextMode === "floating")
+        requestAnimationFrame(refitFloatingTerminals);
     }, 480);
     if (nextMode === "tiled") {
       // Remember the free-canvas camera exactly as the user left it. Tiled mode
@@ -965,6 +1018,27 @@
     }
     if (workspaceMode === "floating")
       send({ type: "patch", id, patch: { zIndex: ++topZ } });
+  }
+
+  function focusAndCenterWindow(id: number) {
+    const target = windowById(id);
+    if (!target) return;
+    focusedWindowID = id;
+    tiledFocusId = id;
+    if (workspaceMode !== "floating") return;
+    requestAnimationFrame(() => {
+      const width = target.width || 760;
+      const height = target.height || 420;
+      moveCanvasTo(
+        target.x,
+        target.y,
+        fitZoomFor(width, height, SINGLE_WINDOW_TOP_INSET) *
+          SINGLE_WINDOW_FOCUS_ZOOM_SCALE,
+        width,
+        height - SINGLE_WINDOW_HEIGHT_TRIM,
+        SINGLE_WINDOW_TOP_INSET,
+      );
+    });
   }
 
   function closeWindow(id: number) {
@@ -1684,54 +1758,6 @@
   });
 </script>
 
-<style>
-  .tile-split-hitbox {
-    touch-action: none;
-    cursor: col-resize;
-    opacity: 0;
-    transition: opacity 140ms ease;
-  }
-
-  /* Keep the generous hit area invisible until the pointer reaches the pane gap. */
-  .tile-split-hitbox:hover,
-  .tile-split-active {
-    opacity: 1;
-  }
-
-  .tile-split-horizontal {
-    cursor: row-resize;
-  }
-
-  .tile-split-pill {
-    pointer-events: none;
-    border: 1px solid rgb(255 255 255 / 0.16);
-    background: rgb(39 39 42 / 0.88);
-    box-shadow: 0 2px 10px rgb(0 0 0 / 0.3), inset 0 1px rgb(255 255 255 / 0.12);
-    transition: width 160ms ease, height 160ms ease, background 160ms ease, box-shadow 160ms ease;
-  }
-
-  .tile-split-vertical .tile-split-pill {
-    width: 5px;
-    height: 48px;
-    border-radius: 999px;
-  }
-
-  .tile-split-horizontal .tile-split-pill {
-    width: 48px;
-    height: 5px;
-    border-radius: 999px;
-  }
-
-  .tile-split-hitbox:hover .tile-split-pill,
-  .tile-split-active .tile-split-pill {
-    background: rgb(165 243 252 / 0.95);
-    box-shadow: 0 2px 14px rgb(34 211 238 / 0.42), inset 0 1px rgb(255 255 255 / 0.55);
-  }
-
-  .tile-split-vertical.tile-split-active .tile-split-pill { width: 7px; }
-  .tile-split-horizontal.tile-split-active .tile-split-pill { height: 7px; }
-</style>
-
 <ToastContainer />
 <svelte:window
   on:keydown={handleDrawingKeydown}
@@ -1751,13 +1777,24 @@
   bind:this={fabricEl}
   class:cursor-grabbing={panning}
   on:pointerdown={handlePointerDown}
-  on:pointermove={(event) => { moveTileSplit(event); handlePointerMove(event); }}
-  on:pointerup={(event) => { stopTileSplit(); handlePointerUp(event); }}
-  on:pointercancel={(event) => { stopTileSplit(); handlePointerUp(event); }}
+  on:pointermove={(event) => {
+    moveTileSplit(event);
+    handlePointerMove(event);
+  }}
+  on:pointerup={(event) => {
+    stopTileSplit();
+    handlePointerUp(event);
+  }}
+  on:pointercancel={(event) => {
+    stopTileSplit();
+    handlePointerUp(event);
+  }}
   on:pointerleave={handlePointerLeave}
   on:wheel={handleWheel}
 >
-  <div class="absolute inset-x-4 top-4 z-[12000] flex flex-col gap-3 sm:left-4 sm:right-4">
+  <div
+    class="absolute inset-x-4 top-4 z-[12000] flex flex-col gap-3 sm:left-4 sm:right-4  pointer-events-none"
+  >
     <Toolbar
       {connected}
       hasWriteAccess={true}
@@ -1809,12 +1846,14 @@
         zoom}px {32 *
         zoom}px; background-position: {viewportX}px {viewportY}px;"
     ></div>
-    <button
-      class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-2 sm:py-1 text-xs text-zinc-300"
-      data-no-pan
-      title="Reset zoom to 100%"
-      on:click={resetZoom}>zoom {Math.round(zoom * 100)}%</button
-    >
+    {#if workspaceMode !== "tiled"}
+      <button
+        class="absolute left-4 bottom-4 z-[10000] rounded-full border border-white/10 bg-zinc-900/80 px-3 py-2 sm:py-1 text-xs text-zinc-300"
+        data-no-pan
+        title="Reset zoom to 100%"
+        on:click={resetZoom}>zoom {Math.round(zoom * 100)}%</button
+      >
+    {/if}
 
     <div
       class="absolute left-0 top-0 origin-top-left"
@@ -1849,6 +1888,7 @@
               send({ type: "patch", id, patch: { cols, rows, width, height } });
             }}
             onClose={(id) => closeWindow(id)}
+            onTitlebarDoubleClick={focusAndCenterWindow}
           />
         {:else}
           <EditorWindow
@@ -1864,6 +1904,7 @@
             onStartResize={(id, event, width, height) =>
               startResize(id, event, width, height)}
             onClose={(id) => closeWindow(id)}
+            onTitlebarDoubleClick={focusAndCenterWindow}
           />
         {/if}
       {/each}
@@ -1881,8 +1922,12 @@
               : `transform: translate(${split.x}px, ${split.y - 13}px); width: ${split.width}px; height: 28px;`}
             data-no-pan
             role="separator"
-            aria-label={split.axis === "vertical" ? "Adjust pane widths" : "Adjust pane heights"}
-            aria-orientation={split.axis === "vertical" ? "vertical" : "horizontal"}
+            aria-label={split.axis === "vertical"
+              ? "Adjust pane widths"
+              : "Adjust pane heights"}
+            aria-orientation={split.axis === "vertical"
+              ? "vertical"
+              : "horizontal"}
             on:pointerdown={(event) => startTileSplit(split.id, event)}
           >
             <span class="tile-split-pill"></span>
@@ -2132,3 +2177,63 @@
 
   <Settings open={settingsOpen} on:close={() => (settingsOpen = false)} />
 </main>
+
+<style>
+  .tile-split-hitbox {
+    touch-action: none;
+    cursor: col-resize;
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+
+  /* Keep the generous hit area invisible until the pointer reaches the pane gap. */
+  .tile-split-hitbox:hover,
+  .tile-split-active {
+    opacity: 1;
+  }
+
+  .tile-split-horizontal {
+    cursor: row-resize;
+  }
+
+  .tile-split-pill {
+    pointer-events: none;
+    border: 1px solid rgb(255 255 255 / 0.16);
+    background: rgb(39 39 42 / 0.88);
+    box-shadow:
+      0 2px 10px rgb(0 0 0 / 0.3),
+      inset 0 1px rgb(255 255 255 / 0.12);
+    transition:
+      width 160ms ease,
+      height 160ms ease,
+      background 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .tile-split-vertical .tile-split-pill {
+    width: 5px;
+    height: 48px;
+    border-radius: 999px;
+  }
+
+  .tile-split-horizontal .tile-split-pill {
+    width: 48px;
+    height: 5px;
+    border-radius: 999px;
+  }
+
+  .tile-split-hitbox:hover .tile-split-pill,
+  .tile-split-active .tile-split-pill {
+    background: rgb(165 243 252 / 0.95);
+    box-shadow:
+      0 2px 14px rgb(34 211 238 / 0.42),
+      inset 0 1px rgb(255 255 255 / 0.55);
+  }
+
+  .tile-split-vertical.tile-split-active .tile-split-pill {
+    width: 7px;
+  }
+  .tile-split-horizontal.tile-split-active .tile-split-pill {
+    height: 7px;
+  }
+</style>

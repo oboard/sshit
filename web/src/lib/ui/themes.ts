@@ -202,6 +202,141 @@ const tokyoNight: ITheme = {
   brightWhite: "#acb0d0",
 };
 
+/** Light themes — bright backgrounds with dark text. */
+
+/** Solarized Light — the classic light counterpart. */
+const solarizedLight: ITheme = {
+  foreground: "#657b83",
+  background: "#fdf6e3",
+  black: "#073642",
+  red: "#dc322f",
+  green: "#859900",
+  yellow: "#b58900",
+  blue: "#268bd2",
+  magenta: "#d33682",
+  cyan: "#2aa198",
+  white: "#eee8d5",
+  brightBlack: "#839496",
+  brightRed: "#cb4b16",
+  brightGreen: "#859900",
+  brightYellow: "#b58900",
+  brightBlue: "#268bd2",
+  brightMagenta: "#d33682",
+  brightCyan: "#2aa198",
+  brightWhite: "#fdf6e3",
+};
+
+/** GitHub Light — clean, neutral light theme. */
+const githubLight: ITheme = {
+  foreground: "#24292e",
+  background: "#ffffff",
+  black: "#24292e",
+  red: "#d73a49",
+  green: "#28a745",
+  yellow: "#dbab09",
+  blue: "#0366d6",
+  magenta: "#6f42c1",
+  cyan: "#1b7c83",
+  white: "#d1d5da",
+  brightBlack: "#959da5",
+  brightRed: "#f97583",
+  brightGreen: "#85e89d",
+  brightYellow: "#ffea7f",
+  brightBlue: "#79b8ff",
+  brightMagenta: "#b392f0",
+  brightCyan: "#1b7c83",
+  brightWhite: "#fafbfc",
+};
+
+/** One Light — Atom's iconic light theme. */
+const oneLight: ITheme = {
+  foreground: "#383a42",
+  background: "#fafafa",
+  cursor: "#526fff",
+  black: "#383a42",
+  red: "#e45649",
+  green: "#50a14f",
+  yellow: "#c18401",
+  blue: "#4078f2",
+  magenta: "#a626a4",
+  cyan: "#0184bc",
+  white: "#a0a1a7",
+  brightBlack: "#4f525e",
+  brightRed: "#e06c75",
+  brightGreen: "#98c379",
+  brightYellow: "#e5c07b",
+  brightBlue: "#61afef",
+  brightMagenta: "#c678dd",
+  brightCyan: "#56b6c2",
+  brightWhite: "#fafafa",
+};
+
+/** Catppuccin Latte — warm, modern light pastel. */
+const catppuccinLatte: ITheme = {
+  foreground: "#4c4f69",
+  background: "#eff1f5",
+  black: "#dce0e8",
+  red: "#d20f39",
+  green: "#40a02b",
+  yellow: "#df8e1d",
+  blue: "#1e66f5",
+  magenta: "#ea76cb",
+  cyan: "#04a5e5",
+  white: "#4c4f69",
+  brightBlack: "#9ca0b0",
+  brightRed: "#e64553",
+  brightGreen: "#40a02b",
+  brightYellow: "#df8e1d",
+  brightBlue: "#1e66f5",
+  brightMagenta: "#ea76cb",
+  brightCyan: "#04a5e5",
+  brightWhite: "#eff1f5",
+};
+
+/** Gruvbox Light — warm retro light variant. */
+const gruvboxLight: ITheme = {
+  foreground: "#3c3836",
+  background: "#fbf1c7",
+  black: "#fbf1c7",
+  red: "#cc241d",
+  green: "#98971a",
+  yellow: "#d79921",
+  blue: "#458588",
+  magenta: "#b16286",
+  cyan: "#689d6a",
+  white: "#7c6f64",
+  brightBlack: "#928374",
+  brightRed: "#9d0006",
+  brightGreen: "#79740e",
+  brightYellow: "#b57614",
+  brightBlue: "#076678",
+  brightMagenta: "#8f3f71",
+  brightCyan: "#427b58",
+  brightWhite: "#3c3836",
+};
+
+/** Tokyo Night Light — airy light complement to Tokyo Night. */
+const tokyoNightLight: ITheme = {
+  foreground: "#343b58",
+  background: "#d5d6db",
+  black: "#0f0f14",
+  red: "#8c4351",
+  green: "#485e30",
+  yellow: "#8f5e15",
+  blue: "#34548a",
+  magenta: "#5a4a6a",
+  cyan: "#0f4b6e",
+  white: "#9699a3",
+  brightBlack: "#565a6e",
+  brightRed: "#c34043",
+  brightGreen: "#76946a",
+  brightYellow: "#ff9e3b",
+  brightBlue: "#7aa2f7",
+  brightMagenta: "#ad8ee6",
+  brightCyan: "#449dab",
+  brightWhite: "#acb0d0",
+};
+
 const themes = {
   "VS Code Dark": defaultDark,
   Hybrid: hybrid,
@@ -212,6 +347,12 @@ const themes = {
   "Gruvbox Dark": gruvboxDark,
   "Solarized Dark": solarizedDark,
   "Tokyo Night": tokyoNight,
+  "Solarized Light": solarizedLight,
+  "GitHub Light": githubLight,
+  "One Light": oneLight,
+  "Catppuccin Latte": catppuccinLatte,
+  "Gruvbox Light": gruvboxLight,
+  "Tokyo Night Light": tokyoNightLight,
 };
 
 export type ThemeName = keyof typeof themes;

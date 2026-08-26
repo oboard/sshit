@@ -26,6 +26,7 @@
   export let onFocus: (id: number) => void = () => {};
   export let onStartMove: (id: number, event: PointerEvent) => void = () => {};
   export let onStartResize: (id: number, event: PointerEvent, width: number, height: number) => void = () => {};
+  export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
   let frameEl: HTMLDivElement;
   let contentEl: HTMLDivElement;
@@ -101,6 +102,7 @@
       tabindex="-1"
       aria-label="{title} window controls"
       on:pointerdown|stopPropagation={(event) => onStartMove(id, event)}
+      on:dblclick|stopPropagation={() => onTitlebarDoubleClick(id)}
     >
       <div class="flex flex-1 items-center px-3">
         <CircleButtons>

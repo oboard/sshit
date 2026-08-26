@@ -3,7 +3,7 @@
   import type { FitAddon } from "@xterm/addon-fit";
   import type { Terminal } from "@xterm/xterm";
 
-  import WindowFrame from "$lib/ui/WindowFrame.svelte";
+  import WorkspaceWindow from "$lib/ui/WorkspaceWindow.svelte";
   import { settings } from "$lib/settings";
   import themes from "$lib/ui/themes";
   import type { WindowState } from "$lib/protocol";
@@ -27,6 +27,7 @@
   export let onFocus: (id: number) => void = () => {};
   export let onBlur: (id: number) => void = () => {};
   export let onTitleChange: (id: number, title: string) => void = () => {};
+  export let onTitlebarDoubleClick: (id: number) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
   let termEl: HTMLDivElement;
@@ -41,7 +42,8 @@
   }
 
   let terminalReady = false;
-  let currentTitle = abbreviateHomePath(shell.cwd || "") || "sshit shell";
+  $: fallbackTitle = abbreviateHomePath(shell.cwd || "") || "sshit shell";
+  $: currentTitle = shell.title || fallbackTitle;
   let renderedOutputLength = 0;
   let disposed = false;
   let terminalError = "";
@@ -237,8 +239,7 @@
       terminalResizeObserver.observe(termEl);
       terminalReady = true;
       terminal.onTitleChange((title) => {
-        currentTitle = title || abbreviateHomePath(shell.cwd || "") || "sshit shell";
-        onTitleChange(shell.id, currentTitle);
+        onTitleChange(shell.id, title || fallbackTitle);
       });
       terminal.onData((data) => onInput(shell.id, data));
       // xterm v6 no longer exposes onFocus/onBlur. Its input textarea is
@@ -270,7 +271,7 @@
   });
 </script>
 
-<WindowFrame
+<WorkspaceWindow
   id={shell.id}
   title={currentTitle}
   x={shell.x}
@@ -290,6 +291,7 @@
   onYellow={() => terminal?.blur()}
   onGreen={() => fitAndReport(true)}
   onFocus={(id) => onFocus(id)}
+  onTitlebarDoubleClick={(id) => onTitlebarDoubleClick(id)}
   onStartMove={(id, event) => onStartMove(id, event)}
   onStartResize={(id, event, width, height) => onStartResize(id, event, width, height)}
 >
@@ -306,4 +308,4 @@
       </div>
     {/if}
   </div>
-</WindowFrame>
+</WorkspaceWindow>

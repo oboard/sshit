@@ -19,6 +19,8 @@ export type WindowState = {
   cwd?: string;
   /** Shell-only: user home directory for path shortening. */
   home?: string;
+  /** Client-side display title for the window. */
+  title?: string;
   /** Editor-only: collaborative document id. */
   docId?: string;
 };
