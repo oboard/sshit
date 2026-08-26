@@ -10,6 +10,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"sshit/internal/compress"
 )
 
 var viteDevServer = flag.String(
@@ -60,5 +62,5 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 		}
 		frontend.ServeHTTP(w, r)
 	})
-	return mux, nil
+	return compress.Middleware(mux), nil
 }

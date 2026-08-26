@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"sshit/internal/compress"
 	"sshit/internal/web"
 )
 
@@ -32,5 +33,5 @@ func newHTTPHandler(hub *webHub) (http.Handler, error) {
 		}
 		files.ServeHTTP(w, r)
 	})
-	return mux, nil
+	return compress.Middleware(mux), nil
 }

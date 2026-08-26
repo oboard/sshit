@@ -1,11 +1,13 @@
 module sshit
 
-go 1.22
+go 1.24
 
 require (
+	github.com/andybalholm/brotli v1.2.2
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/gorilla/websocket v1.5.3
+	github.com/klauspost/compress v1.19.2
 	golang.org/x/crypto v0.31.0
 )
 
