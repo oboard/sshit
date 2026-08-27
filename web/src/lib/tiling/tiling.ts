@@ -7,6 +7,7 @@
  */
 
 export type TileAxis = "horizontal" | "vertical";
+export type TileDropZone = "center" | "left" | "right" | "top" | "bottom";
 
 export type TileNode =
   | { id: string; windowId: number }
@@ -56,6 +57,52 @@ function remapLeaf(tree: TileNode, f: (id: number) => number): TileNode {
 export function swapLeaves(tree: TileNode, aId: number, bId: number): TileNode {
   if (!findPane(tree, aId) || !findPane(tree, bId)) return tree;
   return remapLeaf(tree, id => (id === aId ? bId : id === bId ? aId : id));
+}
+
+/** Move a leaf into one side of another leaf, changing the BSP tree shape. */
+export function moveLeafToZone(
+  tree: TileNode,
+  movingId: number,
+  targetId: number,
+  zone: TileDropZone,
+  nextSplitId: () => string,
+): TileNode {
+  if (movingId === targetId) return tree;
+  if (zone === "center") return swapLeaves(tree, movingId, targetId);
+
+  const movingPane = findPane(tree, movingId);
+  if (!movingPane || !isLeaf(movingPane) || !findPane(tree, targetId)) return tree;
+
+  const withoutMoving = removeLeaf(tree, movingId);
+  if (!withoutMoving) return tree;
+
+  return insertAroundTarget(withoutMoving, movingPane, targetId, zone, nextSplitId);
+}
+
+function insertAroundTarget(
+  node: TileNode,
+  movingPane: Extract<TileNode, { windowId: number }>,
+  targetId: number,
+  zone: Exclude<TileDropZone, "center">,
+  nextSplitId: () => string,
+): TileNode {
+  if (isLeaf(node)) {
+    if (node.windowId !== targetId) return node;
+    const axis: TileAxis = zone === "left" || zone === "right" ? "vertical" : "horizontal";
+    const movingFirst = zone === "left" || zone === "top";
+    return {
+      id: nextSplitId(),
+      axis,
+      ratio: 0.5,
+      first: movingFirst ? movingPane : node,
+      second: movingFirst ? node : movingPane,
+    };
+  }
+  return {
+    ...node,
+    first: insertAroundTarget(node.first, movingPane, targetId, zone, nextSplitId),
+    second: insertAroundTarget(node.second, movingPane, targetId, zone, nextSplitId),
+  };
 }
 
 /** Move focused window in a direction by swapping with its neighbor. */

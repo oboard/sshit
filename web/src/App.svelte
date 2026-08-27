@@ -28,9 +28,10 @@
     neighborPane,
     moveWindowDirection,
     toggleSplitAxis,
-    swapLeaves,
+    moveLeafToZone,
     type TileNode,
     type TileAxis,
+    type TileDropZone,
   } from "$lib/tiling/tiling";
   import { handleTilingKey, type ActionTable } from "$lib/tiling/keybinds";
   import WebTerm from "./WebTerm.svelte";
@@ -116,6 +117,7 @@
   // Ctrl is the modifier that primes tiled chords and drag-to-reorder.
   let ctrlModifierHeld = false;
   const TILED_DRAG_THRESHOLD = 8;
+  type TileDropIntent = { targetId: number; zone: TileDropZone };
   let tiledReorderPotential: {
     windowId: number;
     downX: number;
@@ -131,7 +133,7 @@
     downY: number;
     ghostX: number;
     ghostY: number;
-    lastTarget: number | null;
+    lastDropIntent: TileDropIntent | null;
     targets: Array<{
       windowId: number;
       x: number;
@@ -1186,7 +1188,7 @@
       downY: event.clientY,
       ghostX: pane.x,
       ghostY: pane.y,
-      lastTarget: null,
+      lastDropIntent: null,
       targets: displayWindows
         .filter((windowState) => windowState.id !== id)
         .map(({ id: windowId, x, y, width, height }) => ({
@@ -1198,6 +1200,28 @@
         })),
     };
     tiledReorderPotential = null;
+  }
+
+  function tileDropZoneForTarget(
+    target: { x: number; y: number; width: number; height: number },
+    pointerX: number,
+    pointerY: number,
+  ): TileDropZone {
+    const rx = (pointerX - target.x) / Math.max(1, target.width);
+    const ry = (pointerY - target.y) / Math.max(1, target.height);
+    const edge = 0.25;
+    const nearest = [
+      { zone: "left" as const, distance: rx },
+      { zone: "right" as const, distance: 1 - rx },
+      { zone: "top" as const, distance: ry },
+      { zone: "bottom" as const, distance: 1 - ry },
+    ].sort((a, b) => a.distance - b.distance)[0];
+
+    return nearest.distance < edge ? nearest.zone : "center";
+  }
+
+  function sameTileDropIntent(a: TileDropIntent | null, b: TileDropIntent | null) {
+    return a?.targetId === b?.targetId && a?.zone === b?.zone;
   }
 
   function moveTiledReorder(event: PointerEvent) {
@@ -1221,21 +1245,33 @@
     const rect = fabricEl.getBoundingClientRect();
     const worldX = (event.clientX - rect.left - viewportX) / zoom;
     const worldY = (event.clientY - rect.top - viewportY) / zoom;
-    const target =
-      drag.targets.find(
-        ({ x, y, width, height }) =>
-          worldX >= x &&
-          worldX <= x + width &&
-          worldY >= y &&
-          worldY <= y + height,
-      )?.windowId ?? null;
+    const target = drag.targets.find(
+      ({ x, y, width, height }) =>
+        worldX >= x &&
+        worldX <= x + width &&
+        worldY >= y &&
+        worldY <= y + height,
+    );
+    const dropIntent: TileDropIntent | null = target
+      ? {
+          targetId: target.windowId,
+          zone: tileDropZoneForTarget(target, worldX, worldY),
+        }
+      : null;
 
-    // Swap immediately when crossing a pane. Updating the shared tree only on
-    // drop avoids broadcasting an intermediate layout on every pointer frame.
-    if (target && target !== drag.lastTarget && tileTree) {
-      tileTree = swapLeaves(tileTree, drag.windowId, target);
+    // Apply the hovered drop intent immediately so existing FLIP animation still
+    // drives every non-dragged pane into its new slot. The dragged pane keeps
+    // following the pointer through the ghost coordinates above.
+    if (dropIntent && !sameTileDropIntent(dropIntent, drag.lastDropIntent) && tileTree) {
+      tileTree = moveLeafToZone(
+        tileTree,
+        drag.windowId,
+        dropIntent.targetId,
+        dropIntent.zone,
+        () => `split-${nextTileSplitID++}`,
+      );
     }
-    tiledReorderDrag = { ...drag, ghostX, ghostY, lastTarget: target };
+    tiledReorderDrag = { ...drag, ghostX, ghostY, lastDropIntent: dropIntent };
   }
 
   function finishTiledReorder() {
