@@ -213,7 +213,7 @@
       terminal = new Terminal({
         allowTransparency: false,
         cursorBlink: true,
-        cursorStyle: "block",
+        cursorStyle: "bar",
         fontFamily:
           '"Fira Code VF", "Symbols Nerd Font", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
         fontSize: 14,

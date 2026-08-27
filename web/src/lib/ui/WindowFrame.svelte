@@ -151,7 +151,15 @@
   // `$effect.pre` preserves the previous layout box before Svelte applies DOM
   // updates; `$effect` below then performs the corresponding FLIP animation.
   $effect.pre(() => {
-    if (tiled && !layoutAnimating && !tileResizing && !isDraggedTile && frameEl) {
+    // Track pane geometry explicitly: unlike legacy beforeUpdate, rune effects
+    // only rerun for values they read.
+    void x;
+    void y;
+    void width;
+    void height;
+    // A swap promotes the dragged pane to z-index 1000. Its siblings still need
+    // their prior boxes captured so their FLIP transition runs while it moves.
+    if (tiled && !layoutAnimating && !tileResizing && frameEl) {
       beforeRect = frameEl.getBoundingClientRect();
     } else {
       beforeRect = null;
@@ -162,11 +170,17 @@
     // Mode changes already animate the outer coordinate transform. Clearing the
     // FLIP baseline here prevents an extra scale animation when that transition
     // finishes and `layoutAnimating` becomes false.
-    if (!tiled || layoutAnimating || tileResizing || isDraggedTile || !frameEl || !contentEl) {
+    if (!tiled || layoutAnimating || tileResizing || !frameEl || !contentEl) {
       beforeRect = null;
       return;
     }
     const before = beforeRect;
+    // The pane under the pointer already follows its ghost coordinates directly.
+    // Do not FLIP it, but let every other tile animate into its swapped slot.
+    if (isDraggedTile) {
+      beforeRect = null;
+      return;
+    }
     const after = frameEl.getBoundingClientRect();
     beforeRect = null;
     if (!before) return;

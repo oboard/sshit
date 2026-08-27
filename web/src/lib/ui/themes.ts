@@ -208,6 +208,9 @@ const tokyoNight: ITheme = {
 const solarizedLight: ITheme = {
   foreground: "#657b83",
   background: "#fdf6e3",
+  cursor: "#268bd2",
+  selectionBackground: "#93a1a1",
+  selectionForeground: "#002b36",
   black: "#073642",
   red: "#dc322f",
   green: "#859900",
@@ -230,6 +233,9 @@ const solarizedLight: ITheme = {
 const githubLight: ITheme = {
   foreground: "#24292e",
   background: "#ffffff",
+  cursor: "#0366d6",
+  selectionBackground: "#c8e1ff",
+  selectionForeground: "#24292e",
   black: "#24292e",
   red: "#d73a49",
   green: "#28a745",
@@ -253,6 +259,8 @@ const oneLight: ITheme = {
   foreground: "#383a42",
   background: "#fafafa",
   cursor: "#526fff",
+  selectionBackground: "#d6e4ff",
+  selectionForeground: "#383a42",
   black: "#383a42",
   red: "#e45649",
   green: "#50a14f",
@@ -275,6 +283,9 @@ const oneLight: ITheme = {
 const catppuccinLatte: ITheme = {
   foreground: "#4c4f69",
   background: "#eff1f5",
+  cursor: "#1e66f5",
+  selectionBackground: "#ccd0da",
+  selectionForeground: "#4c4f69",
   black: "#dce0e8",
   red: "#d20f39",
   green: "#40a02b",
@@ -297,6 +308,9 @@ const catppuccinLatte: ITheme = {
 const gruvboxLight: ITheme = {
   foreground: "#3c3836",
   background: "#fbf1c7",
+  cursor: "#458588",
+  selectionBackground: "#d5c4a1",
+  selectionForeground: "#3c3836",
   black: "#fbf1c7",
   red: "#cc241d",
   green: "#98971a",
@@ -319,6 +333,9 @@ const gruvboxLight: ITheme = {
 const tokyoNightLight: ITheme = {
   foreground: "#343b58",
   background: "#d5d6db",
+  cursor: "#34548a",
+  selectionBackground: "#a8aab8",
+  selectionForeground: "#343b58",
   black: "#0f0f14",
   red: "#8c4351",
   green: "#485e30",
