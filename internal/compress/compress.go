@@ -42,6 +42,7 @@ type encodedResponseWriter struct {
 	passthrough     bool
 	statusWritten   bool
 	statusCode      int
+	headersSent     bool
 	headerFinalized bool
 }
 
@@ -70,9 +71,15 @@ func MiddlewareFunc(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (w *encodedResponseWriter) WriteHeader(code int) {
+	// Delay committing headers until we know whether the response will be
+	// compressed. FileServer writes Content-Length before streaming the body;
+	// forwarding that header here would make it impossible to replace it with
+	// Content-Encoding after the compression threshold is crossed.
+	if w.statusWritten {
+		return
+	}
 	w.statusWritten = true
 	w.statusCode = code
-	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *encodedResponseWriter) WriteHeaderNow() {
@@ -107,6 +114,7 @@ func (w *encodedResponseWriter) Write(data []byte) (int, error) {
 			w.disableCompression()
 		}
 		if w.passthrough || w.encoder == nil {
+			w.commitHeaders()
 			n, err := w.ResponseWriter.Write(w.buf)
 			w.buf = nil
 			if err != nil {
@@ -117,6 +125,7 @@ func (w *encodedResponseWriter) Write(data []byte) (int, error) {
 			return len(data), nil
 		}
 		w.Header().Del("Content-Length")
+		w.commitHeaders()
 		_, err := w.encoder.Write(w.buf)
 		w.buf = nil
 		if err != nil {
@@ -126,10 +135,12 @@ func (w *encodedResponseWriter) Write(data []byte) (int, error) {
 	}
 
 	if w.passthrough || w.encoder == nil {
+		w.commitHeaders()
 		return w.ResponseWriter.Write(data)
 	}
 
 	w.Header().Del("Content-Length")
+	w.commitHeaders()
 	return w.encoder.Write(data)
 }
 
@@ -137,6 +148,7 @@ func (w *encodedResponseWriter) Flush() {
 	// If we still have buffered data below the threshold, flush it uncompressed.
 	if len(w.buf) > 0 {
 		w.disableCompression()
+		w.commitHeaders()
 		_, _ = w.ResponseWriter.Write(w.buf)
 		w.buf = nil
 	}
@@ -144,6 +156,7 @@ func (w *encodedResponseWriter) Flush() {
 	if w.encoder != nil && !w.passthrough {
 		_ = w.encoder.Flush()
 	}
+	w.commitHeaders()
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -161,12 +174,15 @@ func (w *encodedResponseWriter) Close() error {
 	// Flush any buffered data that never reached the threshold — send plain.
 	if len(w.buf) > 0 {
 		w.disableCompression()
+		w.commitHeaders()
 		_, _ = w.ResponseWriter.Write(w.buf)
 		w.buf = nil
 	}
 	if w.encoder == nil {
+		w.commitHeaders()
 		return nil
 	}
+	w.commitHeaders()
 	err := w.encoder.Close()
 	w.encoder = nil
 	return err
@@ -222,6 +238,14 @@ func (w *encodedResponseWriter) currentStatus() int {
 		return w.statusCode
 	}
 	return http.StatusOK
+}
+
+func (w *encodedResponseWriter) commitHeaders() {
+	if w.headersSent {
+		return
+	}
+	w.headersSent = true
+	w.ResponseWriter.WriteHeader(w.currentStatus())
 }
 
 func (w *encodedResponseWriter) disableCompression() {
