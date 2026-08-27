@@ -1971,10 +1971,8 @@
         <!-- iPad-style draggable split handles live in the existing 10px pane gap. -->
         {#each tileSplits as split (split.id)}
           <div
-            class="tile-split-hitbox absolute z-[500] grid place-items-center"
-            class:tile-split-active={activeTileSplit === split.id}
-            class:tile-split-vertical={split.axis === "vertical"}
-            class:tile-split-horizontal={split.axis === "horizontal"}
+            class="group absolute z-[500] grid place-items-center opacity-0 transition-opacity duration-[140ms] ease-in hover:opacity-100 {split.axis === "vertical" ? "cursor-col-resize" : "cursor-row-resize"}"
+            class:opacity-100={activeTileSplit === split.id}
             style={split.axis === "vertical"
               ? `transform: translate(${split.x - 13}px, ${split.y}px); width: 28px; height: ${split.height}px;`
               : `transform: translate(${split.x}px, ${split.y - 13}px); width: ${split.width}px; height: 28px;`}
@@ -1988,7 +1986,9 @@
               : "horizontal"}
             on:pointerdown={(event) => startTileSplit(split.id, event)}
           >
-            <span class="tile-split-pill"></span>
+            <span
+              class="pointer-events-none rounded-full border border-white/15 bg-zinc-800/90 shadow-[0_2px_10px_rgb(0_0_0/0.3),inset_0_1px_rgb(255_255_255/0.12)] transition-[width,height,background,box-shadow] duration-150 ease-in group-hover:bg-cyan-200/95 group-hover:shadow-[0_2px_14px_rgb(34_211_238/0.42),inset_0_1px_rgb(255_255_255/0.55)] {activeTileSplit === split.id ? "bg-cyan-200/95 shadow-[0_2px_14px_rgb(34_211_238/0.42),inset_0_1px_rgb(255_255_255/0.55)]" : ""} {split.axis === "vertical" ? `h-12 ${activeTileSplit === split.id ? "w-[7px]" : "w-[5px]"}` : `w-12 ${activeTileSplit === split.id ? "h-[7px]" : "h-[5px]"}`}"
+            ></span>
           </div>
         {/each}
         <!-- Floated-out tiles render as real floating windows above the grid. -->
@@ -2238,63 +2238,3 @@
 
   <Settings open={settingsOpen} on:close={() => (settingsOpen = false)} />
 </main>
-
-<style>
-  .tile-split-hitbox {
-    touch-action: none;
-    cursor: col-resize;
-    opacity: 0;
-    transition: opacity 140ms ease;
-  }
-
-  /* Keep the generous hit area invisible until the pointer reaches the pane gap. */
-  .tile-split-hitbox:hover,
-  .tile-split-active {
-    opacity: 1;
-  }
-
-  .tile-split-horizontal {
-    cursor: row-resize;
-  }
-
-  .tile-split-pill {
-    pointer-events: none;
-    border: 1px solid rgb(255 255 255 / 0.16);
-    background: rgb(39 39 42 / 0.88);
-    box-shadow:
-      0 2px 10px rgb(0 0 0 / 0.3),
-      inset 0 1px rgb(255 255 255 / 0.12);
-    transition:
-      width 160ms ease,
-      height 160ms ease,
-      background 160ms ease,
-      box-shadow 160ms ease;
-  }
-
-  .tile-split-vertical .tile-split-pill {
-    width: 5px;
-    height: 48px;
-    border-radius: 999px;
-  }
-
-  .tile-split-horizontal .tile-split-pill {
-    width: 48px;
-    height: 5px;
-    border-radius: 999px;
-  }
-
-  .tile-split-hitbox:hover .tile-split-pill,
-  .tile-split-active .tile-split-pill {
-    background: rgb(165 243 252 / 0.95);
-    box-shadow:
-      0 2px 14px rgb(34 211 238 / 0.42),
-      inset 0 1px rgb(255 255 255 / 0.55);
-  }
-
-  .tile-split-vertical.tile-split-active .tile-split-pill {
-    width: 7px;
-  }
-  .tile-split-horizontal.tile-split-active .tile-split-pill {
-    height: 7px;
-  }
-</style>

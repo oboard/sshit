@@ -212,8 +212,9 @@
 </script>
 
 <div
-  class="term-container inline-block rounded-lg border border-zinc-700 opacity-90 transition-[transform,opacity] duration-200"
+  class="inline-block rounded-lg border border-zinc-700 opacity-90 transition-[transform,opacity] duration-200 [&:not(.focused)_.xterm]:cursor-default"
   class:focused
+  class:opacity-100={focused}
   style:background={theme.background}
   on:mousedown={() => onBringToFront()}
   on:pointerdown={(event) => event.stopPropagation()}
@@ -262,13 +263,3 @@
     }}
   />
 </div>
-
-<style lang="postcss">
-  .term-container:not(.focused) :global(.xterm) {
-    @apply cursor-default;
-  }
-
-  .term-container.focused {
-    @apply opacity-100;
-  }
-</style>

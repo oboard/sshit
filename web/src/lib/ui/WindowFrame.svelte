@@ -203,8 +203,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   bind:this={frameEl}
-  class="window-frame absolute inline-block select-none"
-  class:mode-animating={layoutAnimating}
+  class="absolute inline-block select-none {layoutAnimating ? '[transition:transform_480ms_cubic-bezier(.16,1,.3,1),opacity_320ms_cubic-bezier(.22,1,.36,1),box-shadow_320ms_cubic-bezier(.22,1,.36,1)]' : ''}"
   style="transform: translate({x}px, {y}px); z-index: {zIndex};"
   data-no-pan
   data-tile-pane={tilePaneId ?? undefined}
@@ -215,16 +214,13 @@
 >
   <div
     bind:this={contentEl}
-    class="window-content rounded-xl border border-white/10 opacity-90 shadow-2xl transition-[opacity,box-shadow] duration-200"
-    class:focused
-    class:interacting={focused}
+    class="rounded-xl border border-white/10 opacity-90 shadow-[0_20px_45px_rgb(0_0_0/0.28),inset_0_1px_rgb(255_255_255/0.05)] transition-[opacity,box-shadow] duration-200 origin-top-left will-change-transform {focused ? 'opacity-100 ring-1 ring-cyan-300/70 shadow-[0_0_0_1px_rgb(34_211_238/0.18),0_22px_54px_rgb(0_0_0/0.38),0_0_34px_rgb(34_211_238/0.1)]' : ''}"
     style="background: {background};"
   >
   {#if tiled && !tiledDecorationsOpen}
-    <div class="tiled-window-controls">
+    <div class="absolute left-1/2 z-20 flex -translate-x-1/2 flex-col items-center">
       <button
-        class="tiled-drag-handle"
-        class:dragging={tiledHandleStart !== null}
+        class="flex h-[26px] w-[42px] cursor-grab items-center justify-center gap-[3px] p-0 active:cursor-grabbing focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300/90 [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:w-[50px] {tiledHandleStart !== null ? 'cursor-grabbing' : ''}"
         type="button"
         aria-label={`Move or show controls for ${title}`}
         aria-expanded={tiledDecorationsOpen}
@@ -234,14 +230,12 @@
         onpointermove={stopPropagation(moveTiledHandle)}
         onpointerup={stopPropagation(finishTiledHandle)}
         onpointercancel={stopPropagation(finishTiledHandle)}
-      ><span></span><span></span><span></span></button>
+      ><span class="h-[3px] w-[3px] rounded-full bg-zinc-200/90 shadow-[0_1px_rgb(0_0_0/0.25)]"></span><span class="h-[3px] w-[3px] rounded-full bg-zinc-200/90 shadow-[0_1px_rgb(0_0_0/0.25)]"></span><span class="h-[3px] w-[3px] rounded-full bg-zinc-200/90 shadow-[0_1px_rgb(0_0_0/0.25)]"></span></button>
     </div>
   {:else}
     <!-- Floating windows and explicitly opened tiled decorations share this titlebar. -->
     <div
-      class="window-titlebar rounded-t-xl flex cursor-move select-none items-center overflow-hidden"
-      class:tiled-titlebar-overlay={tiled}
-      class:floating-titlebar={!tiled}
+      class="flex cursor-move select-none items-center overflow-hidden rounded-t-xl {tiled ? 'absolute inset-x-0 top-0 z-20 shadow-[0_8px_18px_rgb(0_0_0/0.25),inset_0_-1px_rgb(255_255_255/0.06)] backdrop-blur-xl' : 'will-change-transform'}"
       style="touch-action: none;"
       role="toolbar"
       tabindex="-1"
@@ -274,7 +268,7 @@
   {#if !tiled}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="resize-handle absolute -bottom-1 -right-1 h-5 w-5 rounded-sm"
+      class="absolute -bottom-1 -right-1 h-5 w-5 cursor-nwse-resize rounded-sm after:absolute after:bottom-1 after:right-1 after:h-2.5 after:w-2.5 after:rounded-br-xl after:border-b-2 after:border-r-2 after:border-zinc-500 after:content-[''] [@media(pointer:coarse)]:-bottom-2 [@media(pointer:coarse)]:-right-2 [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9 [@media(pointer:coarse)]:after:bottom-2 [@media(pointer:coarse)]:after:right-2 [@media(pointer:coarse)]:after:h-3 [@media(pointer:coarse)]:after:w-3 [@media(pointer:coarse)]:after:border-zinc-400"
       style="touch-action: none;"
       role="separator"
       aria-label={resizeLabel}
@@ -284,99 +278,3 @@
   {/if}
   </div>
 </div>
-
-<style lang="postcss">
-  .window-content {
-    box-shadow: 0 20px 45px rgb(0 0 0 / 0.28), inset 0 1px rgb(255 255 255 / 0.05);
-    transform-origin: top left;
-    will-change: transform;
-  }
-
-  .focused {
-    @apply opacity-100 ring-1 ring-cyan-300/70;
-    box-shadow: 0 0 0 1px rgb(34 211 238 / 0.18), 0 22px 54px rgb(0 0 0 / 0.38), 0 0 34px rgb(34 211 238 / 0.1);
-  }
-
-  /* Normal drags update coordinates continuously; only workspace-mode changes
-     transition the outer position. Ctrl-reorder uses Motion on the inner layer. */
-  .interacting { transition-property: opacity, box-shadow; }
-  .mode-animating {
-    transition: transform 480ms cubic-bezier(.16, 1, .3, 1), opacity 320ms cubic-bezier(.22, 1, .36, 1), box-shadow 320ms cubic-bezier(.22, 1, .36, 1);
-  }
-
-  /* Keep floating titlebars composited while their coordinate transform updates
-     every pointer frame; the tiled overlay deliberately remains in its pane. */
-  .floating-titlebar { will-change: transform; }
-
-  .tiled-titlebar-overlay {
-    position: absolute;
-    z-index: 20;
-    top: 0;
-    right: 0;
-    left: 0;
-    box-shadow: 0 8px 18px rgb(0 0 0 / 0.25), inset 0 -1px rgb(255 255 255 / 0.06);
-    backdrop-filter: blur(12px);
-  }
-
-  .tiled-window-controls {
-    position: absolute;
-    z-index: 20;
-    left: 50%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    transform: translateX(-50%);
-  }
-
-  .tiled-drag-handle {
-    display: flex;
-    gap: 3px;
-    align-items: center;
-    justify-content: center;
-    width: 42px;
-    height: 26px;
-    padding: 0;
-    cursor: grab;
-  }
-
-  .tiled-drag-handle:active,
-  .tiled-drag-handle.dragging { cursor: grabbing; }
-  .tiled-drag-handle:focus-visible { outline: 2px solid rgb(103 232 249 / 0.9); outline-offset: 2px; }
-
-  .tiled-drag-handle span {
-    width: 3px;
-    height: 3px;
-    border-radius: 9999px;
-    background: rgb(228 228 231 / 0.9);
-    box-shadow: 0 1px rgb(0 0 0 / 0.25);
-  }
-
-  @media (pointer: coarse) {
-    .tiled-drag-handle {
-      width: 50px;
-      height: 32px;
-    }
-  }
-
-  .resize-handle {
-    cursor: se-resize;
-    cursor: nwse-resize;
-  }
-
-  .resize-handle::after {
-    content: "";
-    @apply absolute bottom-1 right-1 h-2.5 w-2.5 border-b-2 border-r-2 rounded-br-xl border-zinc-500;
-    pointer-events: none;
-  }
-
-  /* Fingers need a much larger grab target than a mouse cursor. */
-  @media (pointer: coarse) {
-    .resize-handle {
-      @apply -bottom-2 -right-2 h-9 w-9;
-    }
-
-    .resize-handle::after {
-      @apply bottom-2 right-2 h-3 w-3 border-zinc-400;
-    }
-  }
-</style>
