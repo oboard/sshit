@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+web/node_modules
+internal/web/dist
+docs
+screenshots
+*.md
+!README.md
+.DS_Store
+.deps
+coverage.out
+sshit
+*.test
