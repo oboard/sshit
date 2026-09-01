@@ -1460,15 +1460,26 @@
   function handleWheel(event: WheelEvent) {
     if (drawingMode || workspaceMode === "tiled") return;
     event.preventDefault();
-    const rect = fabricEl.getBoundingClientRect();
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-    const beforeX = (mouseX - viewportX) / zoom;
-    const beforeY = (mouseY - viewportY) / zoom;
-    const nextZoom = clampZoom(zoom * Math.exp(-event.deltaY * 0.001));
-    zoom = nextZoom;
-    viewportX = mouseX - beforeX * zoom;
-    viewportY = mouseY - beforeY * zoom;
+
+    // On macOS, trackpad pinch-to-zoom sends wheel events with ctrlKey set;
+    // plain two-finger scrolling does not. Treat Ctrl+wheel as zoom and
+    // unmodified wheel (trackpad scroll / mouse wheel) as panning.
+    if (event.ctrlKey) {
+      const rect = fabricEl.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
+      const beforeX = (mouseX - viewportX) / zoom;
+      const beforeY = (mouseY - viewportY) / zoom;
+      const nextZoom = clampZoom(zoom * Math.exp(-event.deltaY * 0.001));
+      zoom = nextZoom;
+      viewportX = mouseX - beforeX * zoom;
+      viewportY = mouseY - beforeY * zoom;
+    } else {
+      // Trackpad two-finger scroll or mouse wheel: pan the viewport.
+      // Respect the current zoom so the canvas feels 1:1 with the fingers.
+      viewportX -= event.deltaX * zoom;
+      viewportY -= event.deltaY * zoom;
+    }
   }
 
   function detectCursorStyle(clientX: number, clientY: number): string {
