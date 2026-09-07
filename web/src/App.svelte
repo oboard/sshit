@@ -77,7 +77,10 @@
   let users: ServerUser[] = [];
   let windows: WindowState[] = [];
   let termRefs: Record<number, WebTerm> = {};
-  let outputs: Record<number, string> = {};
+  // Output is intentionally not Svelte state. High-volume terminal graphics must
+  // bypass the component update path; chunks wait here only until their terminal
+  // component has installed xterm's parser.
+  const pendingTerminalOutput = new Map<number, Array<Uint8Array | string>>();
   let pendingTiledPtySizes: Record<number, { cols: number; rows: number }> = {};
   let tiledPtyFlushTimer: number | undefined;
   let topZ = 1;
@@ -196,9 +199,6 @@
   } | null = null;
   let lastTap = { time: 0, x: 0, y: 0 };
 
-  // Reused across every binary frame: terminal output is high-frequency, so
-  // creating a new TextDecoder per message would add avoidable allocation.
-  const binDecoder = new TextDecoder();
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 2.5;
   const SINGLE_WINDOW_TOP_INSET = 56;
@@ -361,18 +361,18 @@
         return merged;
       });
 
-      const nextOutputs = { ...outputs };
       for (const w of message.windows) {
         if (w.kind === "shell" && w.buffer !== undefined) {
-          nextOutputs[w.id] = w.buffer;
+          // A hello carries an authoritative replay, unlike incremental binary
+          // frames. Replace rather than append when reconnecting to a live view.
+          replaceTerminalOutput(w.id, w.buffer);
         }
       }
-      for (const id of Object.keys(nextOutputs)) {
-        if (!windows.some((w) => w.id === Number(id) && w.kind === "shell")) {
-          delete nextOutputs[Number(id)];
+      for (const id of pendingTerminalOutput.keys()) {
+        if (!windows.some((w) => w.id === id && w.kind === "shell")) {
+          pendingTerminalOutput.delete(id);
         }
       }
-      outputs = nextOutputs;
 
       if (
         previousCount === 0 &&
@@ -383,6 +383,40 @@
         focusAndCenterWindow(target.id);
       }
     }
+  }
+
+  function deliverTerminalOutput(id: number, data: Uint8Array | string) {
+    const terminal = termRefs[id];
+    if (terminal) {
+      terminal.write(data);
+      return;
+    }
+    const pending = pendingTerminalOutput.get(id);
+    if (pending) pending.push(data);
+    else pendingTerminalOutput.set(id, [data]);
+  }
+
+  function replaceTerminalOutput(id: number, data: Uint8Array | string) {
+    const terminal = termRefs[id];
+    if (terminal) {
+      terminal.replaceOutput(data);
+      return;
+    }
+    pendingTerminalOutput.set(id, data.length ? [data] : []);
+  }
+
+  function flushTerminalOutput(id: number) {
+    const pending = pendingTerminalOutput.get(id);
+    if (!pending) return;
+    const terminal = termRefs[id];
+    // Child onMount and a parent component binding are normally ordered, but
+    // retain the bytes if a future Svelte scheduling change reverses them.
+    if (!terminal) {
+      queueMicrotask(() => flushTerminalOutput(id));
+      return;
+    }
+    pendingTerminalOutput.delete(id);
+    for (const chunk of pending) terminal.write(chunk);
   }
 
   function connect() {
@@ -409,13 +443,10 @@
         if (d.byteLength >= 9 && d.getUint8(0) === 1) {
           const wid = d.getBigInt64(1, false);
           if (wid >= 0n) {
-            const bytes = new Uint8Array(event.data, 9);
-            const data = binDecoder.decode(bytes);
             if (wid <= 0x7fffffff) {
-              outputs = {
-                ...outputs,
-                [Number(wid)]: (outputs[Number(wid)] ?? "") + data,
-              };
+              // Keep the PTY bytes as bytes. TextDecoder is both unnecessary
+              // here (xterm accepts Uint8Array) and costly for image payloads.
+              deliverTerminalOutput(Number(wid), new Uint8Array(event.data, 9));
             }
           }
         }
@@ -469,10 +500,7 @@
         message.id &&
         message.data !== undefined
       ) {
-        outputs = {
-          ...outputs,
-          [message.id]: (outputs[message.id] ?? "") + message.data,
-        };
+        deliverTerminalOutput(message.id, message.data);
       }
     };
 
@@ -1926,7 +1954,7 @@
           <WebTerm
             bind:this={termRefs[windowState.id]}
             shell={windowState}
-            output={outputs[windowState.id] ?? ""}
+            onReady={flushTerminalOutput}
             zIndex={windowState.zIndex ?? 1}
             focused={focusedWindowID === windowState.id}
             tiled={workspaceMode === "tiled"}
@@ -2008,7 +2036,7 @@
             <WebTerm
               bind:this={termRefs[windowState.id]}
               shell={windowState}
-              output={outputs[windowState.id] ?? ""}
+              onReady={flushTerminalOutput}
               zIndex={windowState.zIndex ?? 1}
               focused={focusedWindowID === windowState.id}
               tiled={false}

@@ -88,9 +88,18 @@ func shellWithCwdReporting(shell string) *exec.Cmd {
 func terminalCommandEnv(term string, overrides []string) []string {
 	env := terminalEnv(term)
 	for _, item := range overrides {
-		if key, _, ok := strings.Cut(item, "="); ok {
-			env = appendEnv(env, key, strings.TrimPrefix(item, key+"="))
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
 		}
+		// terminalEnv owns the terminal identity. A login shell's custom
+		// environment (notably a parent Codex process with TERM=dumb) must not
+		// overwrite it after we selected the terminal type for the browser PTY.
+		switch key {
+		case "TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION":
+			continue
+		}
+		env = appendEnv(env, key, value)
 	}
 	return env
 }
@@ -392,10 +401,19 @@ type webClient struct {
 	hub           *webHub
 }
 
+// terminalOutputQueue is deliberately large enough to cover a complete
+// multi-part Kitty frame (terminal-browser commonly emits roughly 500 APC
+// chunks for a 1920×1280 image). Terminal bytes are a stream: dropping one
+// full queue item corrupts the following KGP base64 transmission. A client
+// that cannot drain this much is disconnected instead of being fed a damaged
+// stream.
+const terminalOutputQueue = 512
+
 // wsBinOut carries one terminal-output payload destined for a single client.
 // Channeling raw bytes lets the hot path skip JSON marshaling and parse costs.
 type wsBinOut struct {
-	id   int64
+	// data is the fully framed WebSocket payload. It is immutable and shared by
+	// every connected client, avoiding one header+payload allocation per client.
 	data []byte
 }
 
@@ -524,16 +542,31 @@ func (h *webHub) broadcast(msg wsEnvelope) {
 	}
 }
 
-// broadcastOut fans one terminal-output payload out to every connected client
-// as a binary frame, dropping any blocked reader rather than stalling the PTY.
-func (h *webHub) broadcastOut(id int64, payload []byte) {
+// broadcastOut fans one already-framed terminal payload out to every connected
+// client. The frame is immutable and shared; the writer can pass it straight to
+// Gorilla without re-encoding or copying it for each subscriber.
+//
+// Do not silently drop output here. PTY output is a byte stream, not a sequence
+// of independent screen updates: losing one WebSocket message in the middle of
+// Kitty's m=1/m=0 base64 stream leaves the client unable to decode every frame
+// that follows. A genuinely stalled client is removed after its bounded queue
+// fills; healthy clients continue to receive an exact, ordered stream.
+func (h *webHub) broadcastOut(frame []byte) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, c := range h.clients {
+	slow := make([]int, 0)
+	for id, c := range h.clients {
 		select {
-		case c.out <- wsBinOut{id: id, data: payload}:
+		case c.out <- wsBinOut{data: frame}:
 		default:
+			slow = append(slow, id)
 		}
+	}
+	h.mu.Unlock()
+
+	// removeClient takes the hub lock itself. Doing it after the fan-out keeps a
+	// slow peer from holding the lock while its connection is torn down.
+	for _, id := range slow {
+		h.removeClient(id)
 	}
 }
 
@@ -560,7 +593,7 @@ func (h *webHub) addClient(conn *websocket.Conn) *webClient {
 		authenticated: h.password == "",
 		conn:          conn,
 		send:          make(chan wsEnvelope, 64),
-		out:           make(chan wsBinOut, 64),
+		out:           make(chan wsBinOut, terminalOutputQueue),
 		hub:           h,
 	}
 	if client.authenticated {
@@ -660,22 +693,19 @@ func (h *webHub) readShell(win *webWindow) {
 	for {
 		n, err := win.pty.Read(buf)
 		if n > 0 {
-			// Take one copy: it feeds both the scrollback buffer (shared under
-			// the hub lock) and the client fan-out. Because every client's
-			// writer goroutine reads the same chunk concurrently, it must stay
-			// immutable — never reuse the live pty read buffer after `Read`.
-			chunk := append([]byte(nil), buf[:n]...)
-			// Buffer a copy for scrollback under the lock.
+			// Copy the live PTY read buffer exactly once into its final wire frame.
+			// That immutable frame is shared by all client writers; only the bounded
+			// server-side scrollback needs its own additional copy.
+			frame := encodeBinOut(win.ID, buf[:n])
 			h.mu.Lock()
-			win.buffer = append(win.buffer, chunk...)
+			win.buffer = append(win.buffer, frame[9:]...)
 			if len(win.buffer) > 1<<20 {
 				win.buffer = win.buffer[len(win.buffer)-(1<<20):]
 			}
 			h.dirty = true
 			h.mu.Unlock()
-			// Send the raw bytes straight to clients as a binary frame,
-			// skipping JSON marshaling (escaping/quotes) entirely.
-			h.broadcastOut(win.ID, chunk)
+			// Send raw bytes in their binary frame, skipping JSON escaping/parsing.
+			h.broadcastOut(frame)
 		}
 		if err != nil {
 			h.closeWindow(win.ID)
@@ -1285,10 +1315,9 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 
 		go func() {
 			// One writer goroutine for both channels keeps frames ordered.
-			// Select drains control (JSON) and terminal output (binary) fairly;
-			// if `out` is full, we drop the oldest buffer so a slow client can
-			// never stall a busy PTY. The client re-syncs via the next
-			// "hello"/scrollback replay.
+			// Output is never dropped: if its bounded queue fills broadcastOut
+			// disconnects that stalled client rather than corrupting a terminal
+			// byte stream (in particular a chunked Kitty image transmission).
 			for {
 				select {
 				case msg, ok := <-client.send:
@@ -1302,7 +1331,7 @@ func webSocketShell(hub *webHub) http.HandlerFunc {
 					if !ok {
 						return
 					}
-					if err := conn.WriteMessage(websocket.BinaryMessage, encodeBinOut(out.id, out.data)); err != nil {
+					if err := conn.WriteMessage(websocket.BinaryMessage, out.data); err != nil {
 						return
 					}
 				}

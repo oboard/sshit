@@ -2,6 +2,9 @@
   import { onDestroy, onMount, tick } from "svelte";
   import type { FitAddon } from "@xterm/addon-fit";
   import type { Terminal } from "@xterm/xterm";
+  import { KittyGraphics } from "$lib/webterm/kitty/overlay";
+  import { SyncOutputWatchdog } from "$lib/webterm/sync-output";
+  import { BatchedWriter } from "$lib/webterm/writer";
 
   import WindowFrame from "$lib/ui/WindowFrame.svelte";
   import { settings } from "$lib/settings";
@@ -12,7 +15,6 @@
 
   export let shell: Shell;
   export let zIndex = 1;
-  export let output = "";
   export let focused = false;
   export let tiled = false;
   export let layoutAnimating = false;
@@ -32,11 +34,17 @@
   export let onTitleChange: (id: number, title: string) => void = () => {};
   export let onCwdChange: (id: number, cwd: string) => void = () => {};
   export let onTitlebarDoubleClick: (id: number) => void = () => {};
+  /** Called after the parser and Kitty overlay are installed and output can be accepted. */
+  export let onReady: (id: number) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
+  let kittyGraphics: KittyGraphics | undefined;
+  let terminalWriter: BatchedWriter | undefined;
+  let syncOutput: SyncOutputWatchdog | undefined;
+  let queuedOutput: Array<Uint8Array | string> = [];
   function abbreviateHomePath(path: string) {
     const home = shell.home;
     if (!path || !home) return path;
@@ -70,7 +78,6 @@
   let terminalTitle = "";
   $: fallbackTitle = abbreviateHomePath(shell.cwd || "") || "sshit shell";
   $: currentTitle = terminalTitle || fallbackTitle;
-  let renderedOutputLength = 0;
   let disposed = false;
   let terminalError = "";
   let terminalResizeObserver: ResizeObserver | undefined;
@@ -94,14 +101,41 @@
     onTitleChange(shell.id, fallbackTitle);
   }
 
-  $: if (terminalReady && terminal && output.length !== renderedOutputLength) {
-    if (output.length < renderedOutputLength) {
-      terminal.reset();
-      terminal.write(output);
+  /**
+   * Receive one raw PTY chunk without routing it through Svelte state.
+   *
+   * Terminal output used to be accumulated in App.svelte as one ever-growing
+   * string and passed back as a prop. A graphical application can produce many
+   * megabytes per second, turning every small WebSocket frame into a full string
+   * copy and a component-tree update. Keep it on this imperative hot path.
+   */
+  export function write(data: Uint8Array | string) {
+    if (!data || data.length === 0) return;
+    if (terminalWriter) {
+      terminalWriter.write(data);
     } else {
-      terminal.write(output.slice(renderedOutputLength));
+      queuedOutput.push(data);
     }
-    renderedOutputLength = output.length;
+  }
+
+  /** Replace local scrollback with an authoritative server replay after reconnect. */
+  export function replaceOutput(data: Uint8Array | string) {
+    queuedOutput = [];
+    if (!terminal || !terminalWriter) {
+      if (data && data.length) queuedOutput.push(data);
+      return;
+    }
+    terminalWriter.clear();
+    kittyGraphics?.reset();
+    terminal.reset();
+    if (data && data.length) terminalWriter.write(data);
+  }
+
+  function flushQueuedOutput() {
+    if (!terminalWriter || queuedOutput.length === 0) return;
+    const queued = queuedOutput;
+    queuedOutput = [];
+    for (const chunk of queued) terminalWriter.write(chunk);
   }
 
   function fitAndReport(report = false) {
@@ -162,7 +196,13 @@
    */
   function installScaledMouseCoordinateFix() {
     const mouseService = (terminal as any)._core?._mouseService;
-    if (!mouseService) return;
+    if (
+      !mouseService ||
+      typeof mouseService.getCoords !== "function" ||
+      typeof mouseService.getMouseReportCoords !== "function"
+    ) {
+      return;
+    }
 
     const toTerminalCoordinates = (event: MouseEvent | WheelEvent, element: HTMLElement) => {
       const rect = element.getBoundingClientRect();
@@ -229,7 +269,14 @@
         terminal.loadAddon(new webLinks.value.WebLinksAddon());
       }
       if (image.status === "fulfilled") {
-        terminal.loadAddon(new image.value.ImageAddon({ enableSizeReports: false }));
+        terminal.loadAddon(
+          new image.value.ImageAddon({
+            enableSizeReports: false,
+            // The vendored webterm overlay owns Kitty APC (ESC_G) handling;
+            // leaving addon-image's Kitty parser enabled would race it.
+            kittySupport: false,
+          }),
+        );
       }
       if (typeahead.status === "fulfilled") {
         const addon = new typeahead.value.TypeAheadAddon();
@@ -264,6 +311,19 @@
         return true;
       });
       terminal.open(termEl);
+      // Batch WebSocket chunks to one parser entry per frame. The watchdog keeps
+      // DEC 2026 synchronized output live when an app continuously redraws.
+      syncOutput = new SyncOutputWatchdog(terminal);
+      terminalWriter = new BatchedWriter(terminal, () => syncOutput?.noteWrite());
+      if (KittyGraphics.supported(terminal)) {
+        kittyGraphics = new KittyGraphics(terminal, termEl, {
+          // KGP responses must traverse the PTY just like keyboard input, so
+          // terminal-browser receives its a=q capability reply.
+          respond: (data) => onInput(shell.id, data),
+        });
+      } else {
+        console.warn("Kitty graphics is unavailable: xterm has no APC parser");
+      }
       installScaledMouseCoordinateFix();
       terminalResizeObserver = new ResizeObserver(scheduleTerminalFit);
       terminalResizeObserver.observe(termEl);
@@ -286,6 +346,11 @@
       terminal.textarea?.addEventListener("focus", () => onFocus(shell.id));
       terminal.textarea?.addEventListener("blur", () => onBlur(shell.id));
 
+      // The overlay and all parser handlers exist before replayed output is
+      // parsed, so an initial scrollback containing graphics or OSC 7 is safe.
+      flushQueuedOutput();
+      onReady(shell.id);
+
       await tick();
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       if (!disposed) fitAndReport(true);
@@ -306,6 +371,9 @@
     terminalResizeObserver?.disconnect();
     window.cancelAnimationFrame(terminalFitFrame);
     window.cancelAnimationFrame(terminalFitSettleFrame);
+    terminalWriter?.dispose();
+    syncOutput?.dispose();
+    kittyGraphics?.dispose();
     terminal?.dispose();
   });
 </script>
