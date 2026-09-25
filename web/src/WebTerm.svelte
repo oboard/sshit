@@ -38,6 +38,16 @@
   export let onReady: (id: number) => void = () => {};
 
   const isMac = navigator.platform.startsWith("Mac");
+  // xterm v6 only focuses its textarea from a real mousedown. On touch devices
+  // the screen swallows all touchstart events (including the tap's), so no
+  // compatibility mouse events reach xterm and tapping the terminal never
+  // focuses it. Listen for xterm's gesture events and pointerdown instead.
+  const isTouchDevice =
+    navigator.maxTouchPoints > 0 ||
+    (window.matchMedia?.("(pointer: coarse)").matches ?? false);
+  const focusTapTimeMs = 700;
+  const focusTapMovePx = 30;
+
   let termEl: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
@@ -231,6 +241,43 @@
       getMouseReportCoords(toTerminalCoordinates(event, element), element);
   }
 
+  /** Focus the terminal when a pointer tap releases without becoming a drag. */
+  function handleTermPointerDown(event: PointerEvent) {
+    if (event.pointerType !== "touch" || !terminal) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startT = performance.now();
+    const el = event.currentTarget as HTMLElement;
+    const end = (up: PointerEvent) => {
+      if (
+        up.pointerId === event.pointerId &&
+        Math.hypot(up.clientX - startX, up.clientY - startY) < focusTapMovePx &&
+        performance.now() - startT < focusTapTimeMs
+      ) {
+        terminal.focus();
+      }
+    };
+    el.addEventListener("pointerup", end, { once: true });
+    el.addEventListener("pointercancel", end, { once: true });
+  }
+
+  /**
+   * Real compatibility mouse events never fire for quick taps on touch
+   * (xterm prevents the touchstart), so the pointerdown fallback above is
+   * enough there. But once a terminal has already taken focus, some browsers
+   * start suppressing subsequent touchstarts entirely on double tap, and
+   * iPadOS with a trackpad sends pointerdown with pointerType "mouse". Listen
+   * for xterm's own gesture events as well so every tap path focuses.
+   */
+  function installTouchFocusListeners() {
+    if (!isTouchDevice || !terminal) return;
+    const screen = termEl?.querySelector<HTMLElement>(".xterm-screen");
+    const el = screen ?? terminal.element;
+    if (!el) return;
+    el.addEventListener("pointerdown", handleTermPointerDown);
+    el.addEventListener("-xterm-gesturetap", () => terminal?.focus());
+  }
+
   async function initializeTerminal() {
     terminalError = "";
     try {
@@ -311,6 +358,7 @@
         return true;
       });
       terminal.open(termEl);
+      installTouchFocusListeners();
       // Batch WebSocket chunks to one parser entry per frame. The watchdog keeps
       // DEC 2026 synchronized output live when an app continuously redraws.
       syncOutput = new SyncOutputWatchdog(terminal);
