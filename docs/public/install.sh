@@ -30,18 +30,33 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 printf 'Downloading %s...\n' "$asset"
-if ! curl --fail --location --silent --show-error --connect-timeout 10 \
+if ! curl --fail --location --silent --show-error --connect-timeout 30 \
   "$release_url" --output "$tmp_dir/sshit"; then
   echo "GitHub download failed; retrying through the mirror..." >&2
   rm -f "$tmp_dir/sshit"
-  curl --fail --location --silent --show-error --connect-timeout 10 \
-    "$mirror_url" --output "$tmp_dir/sshit"
+  if ! curl --fail --location --silent --show-error --connect-timeout 30 \
+    "$mirror_url" --output "$tmp_dir/sshit"; then
+    echo "Failed to download ${asset} from both GitHub and the mirror." >&2
+    exit 1
+  fi
 fi
+file_type="$(file -bL "$tmp_dir/sshit" 2>/dev/null || file -b "$tmp_dir/sshit" 2>/dev/null || :)"
+if [[ -n "$file_type" ]]; then
+  case "$file_type" in
+    *executable*|*binary*|*Mach-O*|*ELF*) ;;
+    *)
+      echo "Downloaded file does not look like a binary: $file_type" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 chmod +x "$tmp_dir/sshit"
 
 if [[ -w "$install_dir" ]]; then
   install -m 0755 "$tmp_dir/sshit" "$install_dir/sshit"
 else
+  sudo install -m 0755 -d "$install_dir"
   sudo install -m 0755 "$tmp_dir/sshit" "$install_dir/sshit"
 fi
 

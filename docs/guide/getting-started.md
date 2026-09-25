@@ -4,7 +4,7 @@
 
 ## 安装
 
-Linux x64、macOS arm64 和 macOS x64 可使用安装脚本：
+Linux x64/arm64 和 macOS arm64/x64 可使用安装脚本：
 
 ```bash
 curl -fsSL https://sshit.oboard.fun/install.sh | bash
@@ -18,7 +18,7 @@ curl -fsSL https://sshit.oboard.fun/install.sh | INSTALL_DIR="$HOME/.local/bin" 
 
 安装脚本由本站托管，同时会自动识别操作系统和 CPU 架构，并下载最新 GitHub Release 中对应的二进制文件。
 
-Windows x64 用户可在 PowerShell 中运行以下命令：
+Windows x64/arm64 用户可在 PowerShell 中运行以下命令：
 
 ```powershell
 irm https://sshit.oboard.fun/install.ps1 | iex

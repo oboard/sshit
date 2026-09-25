@@ -33,16 +33,16 @@ SSH 是可靠、通用且脚本友好的远程终端协议；Web UI 则降低了
 
 ### 安装
 
-Linux x64、macOS arm64 和 macOS x64 可通过安装脚本获取最新发行版：
+Linux x64/arm64 和 macOS arm64/x64 可通过安装脚本获取最新发行版：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh | bash
+curl -fsSL https://sshit.oboard.fun/install.sh | bash
 ```
 
-默认安装到 `/usr/local/bin`。若希望安装到用户目录：
+默认安装到 `/usr/local/bin`，脚本会在需要创建该目录时自动使用 `sudo`。若希望安装到用户目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oboard/sshit/main/install.sh \
+curl -fsSL https://sshit.oboard.fun/install.sh \
   | INSTALL_DIR="$HOME/.local/bin" bash
 ```
 
@@ -202,7 +202,7 @@ go run . --port 2222
 
 ## 发布构建
 
-GitHub Actions 会构建 Linux x64、macOS arm64/x64 与 Windows x64 发行产物；推送 `v*` 标签会创建 GitHub Release 并上传相应二进制。
+GitHub Actions 会构建 Linux x64/arm64、macOS arm64/x64 与 Windows x64 发行产物；推送 `v*` 标签会创建 GitHub Release 并上传相应二进制。
 
 ## 技术栈
 

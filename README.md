@@ -33,7 +33,7 @@ SSH is reliable, universal, and script-friendly, while a Web UI makes ad-hoc acc
 
 ### Install
 
-The installer fetches the latest release for Linux x64, macOS arm64, or macOS x64:
+The installer fetches the latest release for Linux x64/arm64 or macOS arm64/x64:
 
 ```bash
 curl -fsSL https://sshit.oboard.fun/install.sh | bash
@@ -207,7 +207,7 @@ go run . --port 2222
 
 ## Release Builds
 
-GitHub Actions builds release artifacts for Linux x64, macOS arm64/x64, and Windows x64. Pushing a `v*` tag creates a GitHub Release and uploads the corresponding binaries.
+GitHub Actions builds release artifacts for Linux x64/arm64, macOS arm64/x64, and Windows x64. Pushing a `v*` tag creates a GitHub Release and uploads the corresponding binaries.
 
 ## Stack
 

@@ -1,19 +1,21 @@
-# Installs the latest sshit Windows x64 release for the current user.
+# Installs the latest sshit Windows release for the current user.
 # Usage: irm https://sshit.oboard.fun/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
 $repo = 'oboard/sshit'
-$asset = 'sshit-windows-x64.exe'
+
+switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+  'X64' { $asset = 'sshit-windows-x64.exe' }
+  'Arm64' { $asset = 'sshit-windows-arm64.exe' }
+  default { throw "Unsupported architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)" }
+}
+
 $installDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'sshit\bin' }
 $installPath = Join-Path $installDir 'sshit.exe'
 $releaseUrl = "https://github.com/$repo/releases/latest/download/$asset"
 $mirrorUrl = "https://ghfast.top/$releaseUrl"
 $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) "sshit-$([System.Guid]::NewGuid().ToString('N')).exe"
-
-if (-not [Environment]::Is64BitOperatingSystem) {
-  throw 'sshit currently supports Windows x64 only.'
-}
 
 try {
   Write-Host "Downloading $asset..."
